@@ -8,7 +8,7 @@ TARGET = sim6502
 LIB = $(TARGET).lib
 
 # Source files
-C_SRC = src/matrix.c src/matrix_const.c src/F.c src/model.c src/program.c
+C_SRC = src/matrix.c src/weights.c src/F.c src/model.c src/program.c
 ASM_SRC = src/text.s
 
 # Intermediate assembly files
@@ -65,14 +65,36 @@ clean:
 	rm -f build/*.s
 	rm -f build/*.o
 	rm -f build/program.*
+	rm -f build/test_harness.*
 
 # Python virtual environment
 VENV = .venv
 PYTHON = $(VENV)/bin/python
 
-# Run Python unit tests
-test: $(VENV)
-	cd tests && ../$(PYTHON) -m pytest -v
+# ----------------------------------------------------------------------------
+# Test harness: a sim65 binary that exposes our C ops to the Python test driver
+# over stdin/stdout. Lets pytest A/B-test C against the Python reference.
+# ----------------------------------------------------------------------------
+
+HARNESS_LIB_C = src/matrix.c src/F.c
+HARNESS_LIB_OBJ = $(HARNESS_LIB_C:src/%.c=build/%.o)
+HARNESS_OUTPUT = build/test_harness.$(TARGET)
+
+# Compile harness.c with -I../../src so it can find matrix.h
+build/harness.s: tests/c_harness/harness.c
+	$(CC65) $(CFLAGS) -I src -o $@ $<
+
+build/harness.o: build/harness.s
+	$(CA65) $(AFLAGS) -o $@ $<
+
+$(HARNESS_OUTPUT): $(HARNESS_LIB_OBJ) build/harness.o
+	$(LD65) $(LDFLAGS) -o $@ $(HARNESS_LIB_OBJ) build/harness.o $(LIB)
+
+harness: $(HARNESS_OUTPUT)
+
+# Run Python unit tests (auto-builds both program and harness binaries)
+test: $(VENV) $(OUTPUT) $(HARNESS_OUTPUT)
+	$(VENV)/bin/pytest tests/test_equivalence.py -v
 
 # Compare C and Python outputs
 test-compare: $(OUTPUT) $(VENV)
@@ -88,4 +110,4 @@ $(VENV): tests/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -r tests/requirements.txt
 
-.PHONY: all clean run apple2 test test-compare
+.PHONY: all clean run apple2 test test-compare harness

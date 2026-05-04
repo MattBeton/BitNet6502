@@ -8,6 +8,15 @@ char i, j, k, l;
 signed int a;
 unsigned char b;
 
+/* Arithmetic right-shift then saturate to int8. cc65's `>>` on signed int is
+ * arithmetic (sign-extending) on the 6502 target, matching Python semantics. */
+signed char shift_sat_int8(signed int acc, unsigned char shift) {
+    signed int shifted = acc >> shift;
+    if (shifted > SCHAR_MAX) return SCHAR_MAX;
+    if (shifted < SCHAR_MIN) return SCHAR_MIN;
+    return (signed char)shifted;
+}
+
 void print_int_matrix(struct int_matrix *m) {
     for (i = 0; i < m->height; i++) {
         for (j = 0; j < m->width; j++) {
@@ -119,4 +128,261 @@ void linear(struct ternary_matrix *W, struct char_matrix *x, struct int_matrix *
     tmp->width = x->width;
     matrix_multiply(W, x, tmp);
     hard_tanh(tmp, z, SCHAR_MAX);
+}
+
+// Copies row token_id of `table` (vocab x C) into `out` (1 x C).
+void embedding_lookup(struct char_matrix *table, unsigned char token_id,
+                      struct char_matrix *out) {
+    char C_dim = table->width;
+    unsigned int row_offset = (unsigned int)token_id * C_dim;
+    for (i = 0; i < C_dim; i++) {
+        out->data[i] = table->data[row_offset + i];
+    }
+}
+
+// Argmax over int16 vector. Returns index of largest element (first wins on ties).
+unsigned char argmax_int16(struct int_matrix *logits) {
+    unsigned int n = (unsigned int)logits->height * (unsigned int)logits->width;
+    unsigned int idx;
+    unsigned char best_idx = 0;
+    signed int best_val = logits->data[0];
+    for (idx = 1; idx < n; idx++) {
+        if (logits->data[idx] > best_val) {
+            best_val = logits->data[idx];
+            best_idx = (unsigned char)idx;
+        }
+    }
+    return best_idx;
+}
+
+/* 8-bit LCG: rng = rng * 75 + 74 (mod 256). Period is the full 256.
+ * Constants give acceptable spectral properties for tiny generators.
+ * Seed of 1 is conventional. */
+static unsigned char rng_state = 1;
+
+void rng_seed(unsigned char seed) {
+    rng_state = seed;
+}
+
+unsigned char top_k_sample(struct int_matrix *logits, unsigned char k) {
+    unsigned char top_idx[16];        /* k <= 16 for our use; we only need 8 */
+    unsigned char i;
+    unsigned char chosen;
+
+    if (k > 16) k = 16;
+
+    /* Repeated argmax with masking. After each pick we set the picked slot
+     * to INT_MIN so the next argmax finds the next-largest. */
+    for (i = 0; i < k; i++) {
+        top_idx[i] = argmax_int16(logits);
+        logits->data[top_idx[i]] = -32768;
+    }
+
+    /* Advance the LCG and pick one of the top-k. */
+    rng_state = (unsigned char)(rng_state * 75 + 74);
+    chosen = rng_state % k;
+    return top_idx[chosen];
+}
+
+// Diagonal SSM update for one timestep. Mutates ssm_state in place.
+// Per channel c, state index s:
+//   decayed = (decay[c,s] * state[c,s]) >> 7
+//   b_u     = ternary(B[c,s]) * u_t[c]
+//   state[c,s] = sat_int8(decayed + b_u)
+// Then per channel c:
+//   c_state[c] = sum_s ternary(C[c,s]) * state[c,s]
+//   c_part = sat_int8(c_state[c] >> ssm_out_shift)
+//   d_part = sat_int8((D[c] * u_t[c]) >> d_shift)
+//   y_t[c] = sat_int8(c_part + d_part)
+void ssm_step(struct char_matrix    *u_t,
+              struct char_matrix    *ssm_state,
+              struct char_matrix    *decay,
+              struct ternary_matrix *B,
+              struct ternary_matrix *C_mat,
+              struct char_matrix    *D,
+              unsigned char          ssm_out_shift,
+              unsigned char          d_shift,
+              struct char_matrix    *y_t) {
+    char C_dim = ssm_state->height;
+    char S = ssm_state->width;
+    char S_packed = S / 4;
+    signed int prod;
+    signed int u_val;
+    signed char d_part_v;
+
+    // Phase 1: state update — for each (c, s)
+    for (i = 0; i < C_dim; i++) {
+        u_val = (signed int)u_t->data[i];
+        for (k = 0; k < S_packed; k++) {
+            b = B->data[i * S_packed + k];
+            for (l = 0; l < 4; l++) {
+                char s_idx = 4 * k + l;
+                signed int dec = (signed int)decay->data[i * S + s_idx]
+                               * (signed int)ssm_state->data[i * S + s_idx];
+                dec = dec >> 7;
+                switch (b & 0b11) {
+                    case 0b00: break;
+                    case 0b01: dec += u_val; break;
+                    case 0b10: dec -= u_val; break;
+                }
+                if (dec > SCHAR_MAX) dec = SCHAR_MAX;
+                else if (dec < SCHAR_MIN) dec = SCHAR_MIN;
+                ssm_state->data[i * S + s_idx] = (signed char)dec;
+                b = b >> 2;
+            }
+        }
+    }
+
+    // Phase 2: output — per channel c
+    for (i = 0; i < C_dim; i++) {
+        u_val = (signed int)u_t->data[i];
+
+        // c_state[c] = sum_s ternary(C[c,s]) * state[c,s]
+        a = 0;
+        for (k = 0; k < S_packed; k++) {
+            b = C_mat->data[i * S_packed + k];
+            for (l = 0; l < 4; l++) {
+                char s_idx = 4 * k + l;
+                signed int sv = (signed int)ssm_state->data[i * S + s_idx];
+                switch (b & 0b11) {
+                    case 0b00: break;
+                    case 0b01: a += sv; break;
+                    case 0b10: a -= sv; break;
+                }
+                b = b >> 2;
+            }
+        }
+        // c_part = sat_int8(c_state >> ssm_out_shift)
+        // d_part = sat_int8((D[c] * u_t[c]) >> d_shift)
+        // y_t[c] = sat_int8(c_part + d_part)
+        prod = (signed int)D->data[i] * u_val;
+        d_part_v = shift_sat_int8(prod, d_shift);
+        a = (signed int)shift_sat_int8(a, ssm_out_shift) + (signed int)d_part_v;
+        if (a > SCHAR_MAX) a = SCHAR_MAX;
+        else if (a < SCHAR_MIN) a = SCHAR_MIN;
+        y_t->data[i] = (signed char)a;
+    }
+}
+
+// Causal depthwise conv1d, one timestep emission.
+//   window: int8 (K, C); newest input at row K-1
+//   W:      ternary (C, K); K must be a multiple of 4 (one packed byte per row)
+//   out:    int8 (1, C)
+// Per channel: acc = sum_k W[c, k] * window[k, c]; out[c] = sat_int8(acc >> shift)
+void depthwise_conv1d_step(struct char_matrix    *window,
+                           struct ternary_matrix *W,
+                           unsigned char          shift,
+                           struct char_matrix    *out) {
+    char K = W->width;
+    char C_dim = W->height;
+
+    /* window is shape-sensitive (we index by row); out is just C linear elements. */
+    if (window->height != K || window->width != C_dim ||
+        (unsigned int)out->height * (unsigned int)out->width != (unsigned int)C_dim) {
+        printf("depthwise_conv1d_step: shape mismatch K=%d C=%d\n", K, C_dim);
+        return;
+    }
+
+    // For each channel c
+    for (i = 0; i < C_dim; i++) {
+        a = 0;
+        // Walk packed ternary bytes for this channel's row of W
+        for (k = 0; k < K / 4; k++) {
+            b = W->data[i * (K / 4) + k];
+            for (l = 0; l < 4; l++) {
+                signed int wv = (signed int)window->data[(4 * k + l) * C_dim + i];
+                switch (b & 0b11) {
+                    case 0b00: break;
+                    case 0b01: a += wv; break;
+                    case 0b10: a -= wv; break;
+                }
+                b = b >> 2;
+            }
+        }
+        out->data[i] = shift_sat_int8(a, shift);
+    }
+}
+
+// Roll window down: shift rows toward index 0, place new_row at row K-1.
+// window: (K, C). new_row: (1, C) or (C,) (height treated as 1).
+void push_conv_window(struct char_matrix *window, struct char_matrix *new_row) {
+    char K = window->height;
+    char C_dim = window->width;
+    char r;
+    for (r = 0; r < K - 1; r++) {
+        for (i = 0; i < C_dim; i++) {
+            window->data[r * C_dim + i] = window->data[(r + 1) * C_dim + i];
+        }
+    }
+    for (i = 0; i < C_dim; i++) {
+        window->data[(K - 1) * C_dim + i] = new_row->data[i];
+    }
+}
+
+// out := sat_int8((a * b) >> shift), element-wise. Used for SSM gating.
+// All three matrices share the same shape; iteration is over the flat array.
+void vec_mul_shift_sat(struct char_matrix *a,
+                       struct char_matrix *b,
+                       unsigned char       shift,
+                       struct char_matrix *out) {
+    unsigned int n = (unsigned int)a->height * (unsigned int)a->width;
+    unsigned int idx;
+
+    if (a->height != b->height || a->width != b->width ||
+        out->height != a->height || out->width != a->width) {
+        printf("vec_mul_shift_sat: shape mismatch\n");
+        return;
+    }
+
+    for (idx = 0; idx < n; idx++) {
+        signed int prod = (signed int)a->data[idx] * (signed int)b->data[idx];
+        out->data[idx] = shift_sat_int8(prod, shift);
+    }
+}
+
+// out := sat_int8((W @ x + bias) >> shift)
+//   W:    ternary (out_f, in_f), in_f must be a multiple of 4
+//   x:    int8    (in_f, seq_len)  — column-by-column
+//   bias: int16   (out_f,)         — one int16 per output row, broadcast across seq_len
+//   shift: per-layer learned right-shift amount
+//   out:  int8    (out_f, seq_len) — pre-allocated by caller
+//
+// Inner loop accumulates into a signed int (int16 on cc65), tested below to fit.
+void ternary_linear(struct ternary_matrix *W,
+                    struct char_matrix    *x,
+                    struct int_matrix     *bias,
+                    unsigned char          shift,
+                    struct char_matrix    *out) {
+    if (W->width != x->height || out->height != W->height || out->width != x->width) {
+        printf("ternary_linear: shape mismatch W=%dx%d x=%dx%d out=%dx%d\n",
+               W->height, W->width, x->height, x->width, out->height, out->width);
+        return;
+    }
+
+    for (i = 0; i < W->height; i++) {
+        for (j = 0; j < x->width; j++) {
+            // Initialise with bias (broadcast across the sequence dimension)
+            a = bias->data[i];
+
+            for (k = 0; k < W->width / 4; k++) {
+                b = W->data[i * (W->width / 4) + k];
+
+                for (l = 0; l < 4; l++) {
+                    switch (b & 0b11) {
+                        case 0b00:
+                            break;
+                        case 0b01:
+                            a += x->data[j + x->width * (4 * k + l)];
+                            break;
+                        case 0b10:
+                            a -= x->data[j + x->width * (4 * k + l)];
+                            break;
+                    }
+                    b = b >> 2;
+                }
+            }
+
+            out->data[i * out->width + j] = shift_sat_int8(a, shift);
+        }
+    }
 }

@@ -263,8 +263,33 @@ def lm_step(
 
 
 # =============================================================================
-# Generation (greedy argmax — what we will do on the 6502)
+# Generation: greedy argmax + top-k with a tiny LCG (matches C exactly)
 # =============================================================================
+
+class LCG8:
+    """8-bit LCG: state = state * 75 + 74 (mod 256). Mirrors C `rng_state` so
+    that top-k sampling produces the same sequence on both sides."""
+    def __init__(self, seed: int = 1) -> None:
+        self.state = seed & 0xFF
+
+    def next_u8(self) -> int:
+        self.state = (self.state * 75 + 74) & 0xFF
+        return self.state
+
+
+def top_k_sample(logits: torch.Tensor, k: int, rng: LCG8) -> int:
+    """Pick one of the top-k logit indices. Mutates `logits` (mask with INT_MIN
+    after each pick) — matches the C implementation byte-for-byte."""
+    if k > 16:
+        k = 16
+    logits = logits.clone()  # don't actually mutate caller's tensor in tests
+    top_idx = []
+    for _ in range(k):
+        idx = int(logits.argmax().item())
+        top_idx.append(idx)
+        logits[idx] = -32768
+    return top_idx[rng.next_u8() % k]
+
 
 @torch.no_grad()
 def generate_greedy(
@@ -284,6 +309,31 @@ def generate_greedy(
     # Decode
     for _ in range(max_new_tokens):
         next_id = int(logits.argmax().item())
+        out.append(next_id)
+        logits = lm_step(next_id, pos, weights, states)
+        pos += 1
+    return out
+
+
+@torch.no_grad()
+def generate_topk(
+    weights: ModelWeights,
+    prompt_ids: list[int],
+    max_new_tokens: int,
+    k: int = 8,
+    rng_seed: int = 1,
+) -> list[int]:
+    """Streaming generation with top-k sampling via the same LCG the C engine uses."""
+    rng = LCG8(rng_seed)
+    states = make_model_state(weights)
+    out = list(prompt_ids)
+    pos = 0
+    logits = None
+    for tid in prompt_ids:
+        logits = lm_step(tid, pos, weights, states)
+        pos += 1
+    for _ in range(max_new_tokens):
+        next_id = top_k_sample(logits, k, rng)
         out.append(next_id)
         logits = lm_step(next_id, pos, weights, states)
         pos += 1
