@@ -18,6 +18,8 @@ This constrains us to approximately 80k parameters (20KB model parameters + infe
 - We should use a simple activation function such as hard tanh; this is easy to compute as an if-statement in 6502-C.
 - We won't be able to use any layer norm due to the integer quantized nature of the model
 
+We want to be able to prove that the model can be inferenced in only int8 and int16 datatypes, with only simple operations (add, multiply, switch for hard tanh, etc.). A reasonable way to show the guarantees of it being possible to inference on the 6502 is to write a second inference.py model script that doesn't do any of the ssm training things (convolution, parallel scan operation, etc.), and holds all weights and performs all operations in int8 or int16 quantization. 
+
 ## Inference
 
 Secondly, we need to write an inference engine that compiles to 6502 bytecode. We will do this in 6502 C, a variant of C that understands the 8-bit constraints of the 6502.
@@ -43,3 +45,6 @@ To extend this pattern when adding a new C function:
 3. Hardcode that output as the expected value in a pytest test, and assert the Python function matches it.
 4. Add the new function's output to `test_runner.py` so `make test-compare` catches any future divergence at the program level.
 
+# TODO
+
+- Switch from int to int16 (current `int` is default to 32-bit int, which is overkill.)
