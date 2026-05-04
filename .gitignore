@@ -2,7 +2,7 @@
 .DS_Store
 *.pyc
 digest.txt
-program
+build/program
 program*
 
 build/*.o
