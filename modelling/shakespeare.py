@@ -9,7 +9,8 @@ import torch
 from torch.utils.data import Dataset
 
 
-DEFAULT_DATA_PATH = Path(__file__).with_name("data") / "shakespeare.txt"
+# DEFAULT_DATA_PATH = Path(__file__).with_name("data") / "shakespeare.txt"
+DEFAULT_DATA_PATH = Path(__file__).with_name("data") / "shakespeare_speech_romeo_juliet.txt"
 
 
 def normalize_text(text: str) -> str:
