@@ -1,0 +1,12 @@
+[project]
+name = "bitnet6502"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "datasets>=4.8.4",
+    "ipykernel>=7.2.0",
+    "numpy>=2.4.4",
+    "torch>=2.11.0",
+]

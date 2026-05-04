@@ -3,8 +3,9 @@ CC65 = cc65
 CA65 = ca65
 LD65 = ld65
 
-# Target platform
-TARGET = apple2
+# Target platform (sim6502 for fast iteration, apple2 for Apple II)
+TARGET = sim6502
+LIB = $(TARGET).lib
 
 # Source files
 C_SRC = src/matrix.c src/matrix_const.c src/F.c src/model.c src/program.c
@@ -18,8 +19,8 @@ C_OBJ = $(C_SRC:src/%.c=build/%.o)
 ASM_OBJ = $(ASM_SRC:src/%.s=build/%.o)
 OBJ = $(C_OBJ) $(ASM_OBJ)
 
-# Output binary
-OUTPUT = build/program
+# Output binary (different file per target to avoid overwrites)
+OUTPUT = build/program.$(TARGET)
 
 # Include directories
 INCLUDES =
@@ -48,11 +49,43 @@ build/%.o: src/%.s
 
 # Rule to link object files into the final binary
 $(OUTPUT): $(OBJ)
-	$(LD65) $(LDFLAGS) -o $@ $(OBJ) apple2.lib
+	$(LD65) $(LDFLAGS) -o $@ $(OBJ) $(LIB)
+
+# Run in sim65 emulator
+run: $(OUTPUT)
+	sim65 $(OUTPUT)
+
+# Build for Apple II (clean needed since object files are target-specific)
+apple2:
+	rm -f build/*.o build/*.s
+	$(MAKE) TARGET=apple2 all
 
 # Clean up build artifacts
 clean:
 	rm -f build/*.s
 	rm -f build/*.o
+	rm -f build/program.*
 
-.PHONY: all clean
+# Python virtual environment
+VENV = .venv
+PYTHON = $(VENV)/bin/python
+
+# Run Python unit tests
+test: $(VENV)
+	cd tests && ../$(PYTHON) -m pytest -v
+
+# Compare C and Python outputs
+test-compare: $(OUTPUT) $(VENV)
+	@echo "Running C implementation..."
+	@sim65 $(OUTPUT) > /tmp/bitnet_c_output.txt
+	@echo "Running Python implementation..."
+	@$(PYTHON) tests/test_runner.py > /tmp/bitnet_py_output.txt
+	@echo "Comparing outputs..."
+	@diff /tmp/bitnet_c_output.txt /tmp/bitnet_py_output.txt && echo "PASS: C and Python outputs match!" || echo "FAIL: Outputs differ"
+
+# Create virtual environment and install dependencies
+$(VENV): tests/requirements.txt
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install -r tests/requirements.txt
+
+.PHONY: all clean run apple2 test test-compare

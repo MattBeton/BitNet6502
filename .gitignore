@@ -1,5 +1,8 @@
 *.jar
 .DS_Store
 *.pyc
+digest.txt
+program
+program*
 
 build/*.o
