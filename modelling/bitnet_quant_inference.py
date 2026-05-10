@@ -14,26 +14,27 @@ Datatype contract
   Conv lookback ring buffer:        int8
   Accumulators / matmul scratch:    int16  [-32768, 32767]   (held in int32 in torch)
   Weight matrices (ternary):        int8 storing values in {-1, 0, +1}
+  Weight matrices (int4):           int8 storing values in [-7, +7]   (head, conv, SSM C)
   Biases:                           int16
   SSM decay (effective a/128):      int8 in [0, 127]
   SSM D:                            int8
   Per-layer right-shift amount:     python int (range 0..14)
   Token / position embeddings:      int8
 
-Architecture (summary of bitnet_quant.py with no ablations)
------------------------------------------------------------
-  token_emb[id] (+ pos_emb[t])  →  clip int8
+Architecture (summary of bitnet_quant.py with the final stack)
+--------------------------------------------------------------
+  token_emb[id]  →  clip int8
     │
     └─ × 3 blocks:
          in_proj(x)                            → (2*C,) int8        (ternary linear + bias + shift)
          u, gate = split(_, half)
-         u = depthwise_causal_conv1d(u)        → (C,) int8           (ternary, K=4)
-         y, state = ssm_step(u, state)         → (C,) int8           (per-channel diagonal SSM)
+         u = depthwise_causal_conv1d(u)        → (C,) int8           (int4, K=4)
+         y, state = ssm_step(u, state)         → (C,) int8           (B ternary, C int4, decay/D int8)
          y = (y * gate) >> gate_shift, sat     → (C,) int8           (gating)
          y = out_proj(y)                       → (C,) int8           (ternary linear + bias + shift)
          x = clip_int8(x + y)                  → (C,) int8           (residual)
     │
-    └─ head(x): ternary linear → int16 logits → argmax → next token id
+    └─ head(x): int4 linear → int16 logits → argmax → next token id
 """
 from __future__ import annotations
 
@@ -82,6 +83,22 @@ def ternary_linear(
     acc = torch.matmul(x.to(torch.int32), weight.to(torch.int32).t())  # (..., out_f) int32
     acc = acc + bias.to(torch.int32)
     return shift_sat_int8(acc, shift)
+
+
+def int4_logits(
+    x: torch.Tensor,            # int8 (..., in_f)
+    weight: torch.Tensor,       # int8 int4 (out_f, in_f), values in [-7, +7]
+    shift: int,
+) -> torch.Tensor:              # int16 (..., out_f) — head output, no saturation
+    """Head linear: int8 input · int4 weight → int32 acc → >>shift → int16 logits.
+
+    No saturation: we keep the int16 dynamic range so argmax is exact. With
+    n_embd × 127 × 7 ≈ 72k, the pre-shift accumulator can exceed int16, but the
+    learned head_shift (≈6 in the trained model) brings it well within int16.
+    On the 6502 the accumulator is signed long (32-bit), shifted at the end.
+    """
+    acc = torch.matmul(x.to(torch.int32), weight.to(torch.int32).t())  # (..., out_f) int32
+    return (acc >> shift).to(torch.int16)
 
 
 def depthwise_conv1d_step(
@@ -145,11 +162,11 @@ class BlockWeights:
     in_proj_weight: torch.Tensor    # int8 ternary (2C, C)
     in_proj_bias: torch.Tensor      # int16 (2C,)
     in_proj_shift: int
-    conv_weight: torch.Tensor       # int8 ternary (C, K)
+    conv_weight: torch.Tensor       # int8 ternary or int4 (C, K)
     conv_shift: int
     decay: torch.Tensor             # int8 (C, S), [0, 127]
     B: torch.Tensor                 # int8 ternary (C, S)
-    C_mat: torch.Tensor             # int8 ternary (C, S)
+    C_mat: torch.Tensor             # int8 ternary or int4 (C, S)
     D: torch.Tensor                 # int8 (C,)
     ssm_out_shift: int
     d_shift: int
@@ -231,8 +248,14 @@ class ModelWeights:
     token_embedding: torch.Tensor       # int8 (vocab, C)
     pos_embedding: torch.Tensor | None  # int8 (block_size, C) or None
     blocks: list[BlockWeights]
-    head_weight: torch.Tensor           # int8 ternary (vocab, C)
+    head_weight: torch.Tensor           # int8 ternary or int4 (vocab, C)
     head_shift: int                     # argmax-invariant; kept for fidelity to training
+    # Per-tensor quantization flags. When False the tensor is ternary {-1,0,+1},
+    # when True it is int4 [-7..+7]. The numeric kernels are identical for both;
+    # the flags only matter for the on-device packed-byte layout (2-bit vs 4-bit).
+    int4_head: bool = False
+    int4_ssm_C: bool = False
+    int4_conv: bool = False
 
 
 def make_model_state(weights: ModelWeights) -> list[BlockState]:
@@ -257,9 +280,9 @@ def lm_step(
     for w, s in zip(weights.blocks, states):
         x = block_step(x, w, s)                                                    # (C,) int8
 
-    # Head: int8 · ternary → int16 logits, optional shift (argmax-invariant)
-    acc = torch.matmul(x.to(torch.int32), weights.head_weight.to(torch.int32).t())  # (vocab,) int32
-    return (acc >> weights.head_shift).to(torch.int16)
+    # Head: int8 · {ternary or int4} weight → int16 logits with learned shift.
+    # No saturation: argmax needs the full int16 dynamic range.
+    return int4_logits(x, weights.head_weight, weights.head_shift)
 
 
 # =============================================================================
@@ -320,7 +343,7 @@ def generate_topk(
     weights: ModelWeights,
     prompt_ids: list[int],
     max_new_tokens: int,
-    k: int = 8,
+    k: int = 4,
     rng_seed: int = 1,
 ) -> list[int]:
     """Streaming generation with top-k sampling via the same LCG the C engine uses."""
@@ -354,11 +377,31 @@ def _get(obj, key: str):
 
 
 def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
+    # Newer checkpoints pickle a `Config` from the top-level `bitnet_quant` module
+    # and the experiment-stack subclasses (`StackedBitNetLM`, `Int4SSMLayer`, …)
+    # from `modelling/experiments/`. Make both importable regardless of how this
+    # function is called (pytest from repo root, sim65 driver, exporter, …).
+    here = Path(__file__).resolve().parent
+    for p in (here, here / "experiments"):
+        s = str(p)
+        if s not in sys.path:
+            sys.path.insert(0, s)
+
     ck = torch.load(path, map_location="cpu", weights_only=False)
     sd = ck["state_dict"]
     cfg_t = ck["cfg"]
     vocab = ck["vocab"]
     vocab_size = len(_get(vocab, "itos"))
+
+    # Older checkpoints have no "stack" key — they're plain ternary everywhere.
+    stack = ck.get("stack", {}) or {}
+    int4_head    = bool(stack.get("int4_head", False))
+    int4_ssm_C   = bool(stack.get("int4_ssm_C", False))
+    int4_conv    = bool(stack.get("int4_conv", False))
+    # Each int4 tensor uses the [-7, +7] alphabet (E1a/E1c convention).
+    head_lo, head_hi = (-7, 7) if int4_head else (-1, 1)
+    C_lo, C_hi       = (-7, 7) if int4_ssm_C else (-1, 1)
+    conv_lo, conv_hi = (-7, 7) if int4_conv  else (-1, 1)
 
     cfg = ModelConfig(
         block_size=_get(cfg_t, "block_size"),
@@ -382,11 +425,11 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
             in_proj_weight  = _round_clip(sd[p + "in_proj.weight"], torch.int8, -1, 1),
             in_proj_bias    = _round_clip(sd[p + "in_proj.bias"], torch.int16, -32768, 32767),
             in_proj_shift   = int(round(sd[p + "in_proj.shift"].item())),
-            conv_weight     = _round_clip(sd[p + "conv_weight"], torch.int8, -1, 1),
+            conv_weight     = _round_clip(sd[p + "conv_weight"], torch.int8, conv_lo, conv_hi),
             conv_shift      = int(round(sd[p + "conv_shift"].item())),
             decay           = _round_clip(sd[p + "decay"], torch.int8, 0, 127),
             B               = _round_clip(sd[p + "B"], torch.int8, -1, 1),
-            C_mat           = _round_clip(sd[p + "C"], torch.int8, -1, 1),
+            C_mat           = _round_clip(sd[p + "C"], torch.int8, C_lo, C_hi),
             D               = _round_clip(sd[p + "D"], torch.int8, -128, 127),
             ssm_out_shift   = int(round(sd[p + "ssm_out_shift"].item())),
             d_shift         = int(round(sd[p + "d_shift"].item())),
@@ -398,7 +441,7 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
             use_gate        = cfg.use_gate,
         ))
 
-    head_weight = _round_clip(sd["head.weight"], torch.int8, -1, 1)
+    head_weight = _round_clip(sd["head.weight"], torch.int8, head_lo, head_hi)
     head_shift = int(round(sd["head.shift"].item()))
 
     return ModelWeights(
@@ -408,6 +451,9 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
         blocks=blocks,
         head_weight=head_weight,
         head_shift=head_shift,
+        int4_head=int4_head,
+        int4_ssm_C=int4_ssm_C,
+        int4_conv=int4_conv,
     ), vocab
 
 
@@ -416,7 +462,7 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
 # =============================================================================
 
 def main() -> None:
-    ckpt_path = Path(__file__).parent.parent / "build" / "bitnet_quant_npe84.pt"
+    ckpt_path = Path(__file__).parent.parent / "build" / "bitnet_quant_final_v3.pt"
     weights, vocab = load_checkpoint(ckpt_path)
 
     cfg = weights.cfg

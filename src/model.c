@@ -23,13 +23,13 @@ void block_step(struct char_matrix   *x,
     proj_u.data    = proj_buf.data;
     proj_gate.data = proj_buf.data + N_EMBD;
 
-    /* 3) Push u into the conv ring buffer, then emit one conv step. */
+    /* 3) Push u into the conv ring buffer, then emit one conv step (int4 kernel). */
     push_conv_window(s->conv_window, &proj_u);
-    depthwise_conv1d_step(s->conv_window, w->conv_W, w->conv_shift, &u_post_conv);
+    int4_depthwise_conv1d_step(s->conv_window, w->conv_W, w->conv_shift, &u_post_conv);
 
-    /* 4) SSM: u_post_conv (1, C) + state -> y_buf (1, C), state mutated */
-    ssm_step(&u_post_conv, s->ssm_state, w->decay, w->B, w->C_mat, w->D,
-             w->ssm_out_shift, w->d_shift, &y_buf);
+    /* 4) SSM: u_post_conv (1, C) + state -> y_buf (1, C), state mutated. C is int4. */
+    ssm_step_int4_C(&u_post_conv, s->ssm_state, w->decay, w->B, w->C_mat, w->D,
+                    w->ssm_out_shift, w->d_shift, &y_buf);
 
     /* 5) Gate: y_gated = sat_int8((y_buf * gate) >> gate_shift) */
     vec_mul_shift_sat(&y_buf, &proj_gate, w->gate_shift, &y_gated);
@@ -62,16 +62,8 @@ void lm_step(unsigned char token_id) {
         block_step(&x_buf, &blocks[layer], &block_states[layer], &x_buf);
     }
 
-    /* Head: logits = head_W @ x  (no bias)
-     * We can reuse ternary_linear by passing a zero-bias matrix, but that
-     * would need another scratch buffer. Use matrix_multiply for the dot
-     * product, then >>head_shift (argmax-invariant; kept for fidelity). */
-    matrix_multiply(&head_W, &x_buf, &logits);
-    /* Apply head_shift element-wise. argmax is invariant, but matches Python. */
-    {
-        unsigned char i;
-        for (i = 0; i < VOCAB_SIZE; i++) {
-            logits.data[i] = logits.data[i] >> head_shift;
-        }
-    }
+    /* Head: int4 weight, no bias. Writes int16 logits directly (no saturation):
+     *   logits[v] = (head_W @ x_buf)[v] >> head_shift
+     * argmax / top-k consumes the int16 vector in `logits`. */
+    int4_logits(&head_W, &x_buf, head_shift, &logits);
 }

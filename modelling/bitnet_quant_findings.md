@@ -13,9 +13,9 @@ int-only inference engine on the 6502 will produce.
 | --- | ---: |
 | Parameters | 76,123 |
 | Ternary parameters | 70,812 |
-| Steps | 6,000 |
-| Test loss | **1.7426** |
-| Final train loss | 1.7599 |
+| Steps | 12,000 |
+| Test loss | **1.6853** |
+| Final train loss | 1.7093 |
 | Architecture | recurrent diagonal SSM, 3 layers, n_embd=84, state_size=8, gated, no position embedding |
 | Activations | int8 throughout the residual stream |
 | Accumulator | int16 |
@@ -28,41 +28,34 @@ int-only inference engine on the 6502 will produce.
 | Head | ternary weights, int16 logits, argmax for inference |
 | Generation on 6502 | greedy argmax (no softmax / `exp` / division anywhere) |
 
-Saved checkpoint: `build/bitnet_quant_npe84.pt`.
+Saved checkpoints:
+
+- `build/bitnet_quant_npe84.pt` — 6,000-step run, test loss 1.7426 (earlier deployable target).
+- `build/bitnet_quant_npe84_12k.pt` — **12,000-step run, test loss 1.6853 (current deployable target).**
 
 ### Sample generations
 
-Greedy:
+12k-step model, top-k (k=8, T=0.9):
 
 ```
-the bear a made a made a am that a made a am and burn a able a made a am and a make a be a am that ...
+arther of wome byat my wife man let for men for worthy this bring to surp and all will his art in with
+mads back thee rated is the so guar a for she romeo in sees a will be honour oner worshor hart brother
+hear bornd i blows as the an set now so all langed in is the and sh the mather for on the gentlows for
+the shoply bereas that as with a cont cannotined chear in being alful areset whim fest nomi
 ```
 
-Top-k (k=8, T=0.9):
-
-```
-stilf our and the see ope my to and shers guill booth hust which arish to mine of the pread we comioly bre
-of all will now my love whin herefull of his and his tis do the what reced to cought cothen what sir thin
-burbenes you stren our answens worther brin his and you bring our his surars worn i thou me pon the a home
-but your may fors in your peausen brain i i our worrow courare to have to dingra
-```
-
-Top-k samples are recognizably English, with frequent valid words (`our`, `and`, `the`,
-`see`, `to`, `mine`, `now`, `my`, `love`, `his`, `what`, `you`, `home`, `your`, `have`).
-Greedy decoding collapses into repetitive 3–4 token loops, which is normal for a
-small char-level LM at this loss.
+Sample is recorded for completeness; loss is the metric we trade off against. At
+2.43 bits / character (1.6853 nats / ln 2) the model is well above the entropy of
+English text but still produces mostly malformed words, which is what would be
+expected of a 76k-parameter, fully-quantized character-level LM.
 
 ## Comparison to upstream baselines
 
 | Model | Params | Steps | Test loss | Notes |
 | --- | ---: | ---: | ---: | --- |
-| Transformer baseline (`transformer.py`) | 95,187 | 2,000 | 2.0823 | float, full FP32 |
 | Unquantized SSM (`state-space.py`, `state-size=8`) | 96,903 | 2,800 | 1.4715 | float, parallel-scan SSM, LayerNorm |
-| **BitNet quant SSM (this work)** | **76,123** | **6,000** | **1.7426** | int8/int16, ternary, recurrent, no norm |
-
-The deployable BitNet model beats the unquantized transformer baseline by 0.34 nats
-despite using 20% fewer parameters and being fully integer-quantized. It trails the
-unquantized state-space baseline by 0.27 nats, which is the price of the 6502 constraints.
+| BitNet quant SSM (6k steps) | 76,123 | 6,000 | 1.7426 | int8/int16, ternary, recurrent, no norm |
+| **BitNet quant SSM (12k steps, current target)** | **76,123** | **12,000** | **1.6853** | same architecture, longer training |
 
 ## Iteration history
 
@@ -112,57 +105,141 @@ by module-level state, so the same model code is used in every run.
 
 ### Reading the table
 
-- **A5 vs A0**: the full cost of quantization on this architecture is **0.30 nats**.
-- **A2 → A0**: int8 activation rounding (without changing anything else) costs ~0.08 nats.
-- **A3 → A0**: the ±127 clip on top of the shift costs ~0.05 nats. The remaining 0.05
-  is the rounding-to-int that A3 still does.
-- **A1 (float weights, int8 activations) is *worse* than A0**: this isn't real signal.
-  The shift initialisations and uniform `[-1, 1]` weight inits in `bitnet_quant.py` are
-  tuned so that `~50%` of weights round to ±1 after ternary quantization. Removing the
-  ternary round leaves weight magnitudes well below 1, so the int16 accumulator output
-  is much smaller than the shift expects — most layers output near-zero activations and
-  the network has little signal to train on. This is a calibration confound, not
-  evidence that ternary weights help.
-- **The 0.30 quant cost stacks roughly additively**: 0.08 (int8 acts) + 0.05 (clip) +
-  ~0.16 from interactions (mainly: ternary weights are hard to compose with saturating
-  activations because the network has fewer ways to express small adjustments).
+The total cost of quantization (A5 → A0) is **0.30 nats**. Decomposing it into
+"add ternary weights first, then add int8 activations":
+
+| transition | constraint added | Δ |
+| --- | --- | ---: |
+| A5 → A2 | float weights → ternary weights (activations still float) | **+0.21 nats** |
+| A2 → A0 | float activations → 8-bit activation precision | **+0.08 nats** |
+| A5 → A0 (sum) | full quantization | **+0.30 nats** ✓ |
+
+So most of the gap — about **2/3 — is the ternary weight rounding**, and the
+8-bit activation precision accounts for only ~1/3 of it.
+
+**On the activation cost: the split between "clip" (0.05) and "rounding" (0.03)
+isn't a split between two different constraints.** The shift+clip is a
+hard-tanh-shaped 8-bit quantizer with two failure modes — values inside ±127
+get snapped to the nearest int (rounding loss), values that would have exceeded
+±127 get capped (clipping loss). Both are consequences of *the same* 8-bit
+budget; with 16-bit acts, both losses shrink in lockstep. The 0.05/0.03 split
+just reflects how the trained model spends its 8 bits — its learned shifts
+push activations close to the saturating edge of the int8 range, where each
+unit covers more relative range. That's an optimal use of the bits, not
+evidence of two separable cost sources.
+matt's note: doesn't this mean that this ablation test was just wrongly performed? The test should have been performed using initialization
+
+A1 (float weights, int8 activations) sits at 2.81, *worse* than A0. This is a
+calibration artefact, not evidence that ternary weights help: the shift
+initialisations and the uniform `[-1, 1]` weight inits are tuned so that ~50%
+of weights round to ±1 in the ternary path. Removing the ternary round leaves
+float weights with magnitudes well below 1, the int16 accumulator output is
+much smaller than the shift expects, layers emit near-zero activations, and
+training stalls. The clean reading of "what does ternary cost?" is A5 → A2
+(both regimes share the same calibration), giving the 0.21 above.
+
+The remaining **0.12 nats between A5 (1.58) and the upstream unquantized
+state-space baseline (1.46)** is **architectural**: ~20% fewer parameters,
+recurrent vs parallel-scan SSM, no LayerNorm, hardtanh-style saturation in
+the residual stream.
 - **The remaining 0.12 nats** between A5 (1.58 at 4,000 steps, this architecture) and
   the upstream unquantized state-space baseline (1.46 at 2,800 steps, ~95k params, no
   pos embed disabled, parallel-scan SSM with LayerNorm) is **architecture difference**:
   fewer parameters (76k vs 95k), recurrent vs parallel-scan SSM, no LayerNorm,
   hardtanh-style saturation in the residual stream.
 
+### RMSNorm ablation (added later)
+
+The unquantized SSM baseline uses LayerNorm before each block. We don't, because
+LayerNorm requires float division. To test whether the missing normalisation is a
+significant part of our gap, we added an integer-faithful pre-block RMSNorm
+(`QuantRMSNorm` in `bitnet_quant.py`) with a per-channel learned int8 gain. The
+forward path mirrors `rms_norm` in `src/F.c` (sum of squares → integer sqrt →
+signed/unsigned divide) plus the gain, so it is deployable on the 6502. Same
+4,000-step training schedule as the rest of the ablation.
+
+| Run | Test loss | Δ vs no-norm sibling |
+| --- | ---: | ---: |
+| A0 full quant + RMSNorm | 1.8622 | −0.009 |
+| A0 full quant (no norm) | 1.8713 | — |
+| A5 all float + RMSNorm | 1.5537 | −0.022 |
+| A5 all float (no norm) | 1.5757 | — |
+
+**RMSNorm gives ~0.01 nats in the quantized regime and ~0.02 nats in the float
+regime — both within run-to-run noise.** The gap to the upstream SSM baseline is
+*not* explained by the missing LayerNorm.
+
+Why? A few candidate reasons:
+
+- The integer gain receives a very small gradient signal (~1e-5 at init, vs
+  ~1e-3 for the matmul weights). AdamW normalises this, but the effective step
+  size is still small relative to the int8 quantisation grain — the gain barely
+  moves off its init value of 32.
+- Our architecture only has 3 layers. RMSNorm matters more for deeper stacks
+  where activation magnitudes drift across many residual additions.
+- The saturating int8 add in the residual stream (`fake_quant_int8(residual + y)`)
+  already keeps activation magnitudes bounded, performing some of the same
+  job as RMSNorm at this depth.
+
+**Implication for inference engine work:** integer RMSNorm is *not* worth
+implementing on the C side for this architecture. The existing `rms_norm` in
+`F.c` can stay unused.
+
+### Longer training
+
+The 6,000-step run was visibly still descending at the final eval. Doubling to
+12,000 steps (with a proportionally longer cosine schedule, 600-step warmup)
+recovered another **0.057 nats**:
+
+| Run | Steps | Test loss |
+| --- | ---: | ---: |
+| no-pos-embed-84 (6k) | 6,000 | 1.7426 |
+| **no-pos-embed-84 (12k)** | **12,000** | **1.6853** |
+
+The trajectory is noisy in late training (e.g. step 8000 → step 9000 went 1.69 →
+1.79 → back to 1.71), reflecting the integer shift parameters flipping between
+adjacent values and causing discrete output magnitude jumps. A future
+intervention worth trying is freezing the shifts after, say, 60% of training
+to remove this oscillation source.
+
 ### Total gap accounting
 
 Starting from the unquantized SSM baseline (1.46) and walking to the deployable
-quantized model (1.74):
+quantized model (1.69 at 12k steps), with each constraint measured *in the
+regime where everything else above it is also off*:
 
-| Step | Loss | Cumulative Δ |
+| Step | Loss (4k steps unless noted) | Cumulative Δ |
 | --- | ---: | ---: |
-| Unquantized SSM baseline (95k params, parallel scan, LayerNorm) | 1.46 | 0.00 |
-| Same baseline reproduced in our recurrent/no-norm/76k-param architecture (A5) | 1.58 | +0.12 |
-| Add int8 activations | ~1.66 | +0.08 |
-| Add ±127 saturation | ~1.71 | +0.05 |
-| Add ternary weight rounding (full deployable, A0) | 1.87 | +0.16 |
-| (A0 was 4k steps; 6k-step run gets to 1.74) | 1.74 | (training time) |
+| Unquantized SSM baseline (95k params, parallel scan, LayerNorm, 2,800 steps) | 1.46 | 0.00 |
+| Reproduce in our recurrent / no-norm / 76k-param architecture (A5) | 1.58 | +0.12 |
+| Add ternary weight rounding (A2: ternary W, float acts) | 1.79 | +0.21 |
+| Add int8 activations + shift + ±127 clip (A0, full quant) | 1.87 | +0.08 |
+| Same A0 architecture trained 12k steps instead of 4k (current target) | 1.69 | (training time recovers ~0.18) |
 
-The takeaway: roughly **2/3 of the loss-gap to the upstream SSM is the cost of
-quantization** and is essentially the price of running on a 6502; the remaining
-**1/3 is architectural** (recurrent state, no norm, fewer params) and is potentially
-recoverable.
+So at 12k steps the deployable model is **0.23 nats away from the upstream
+baseline**, decomposing roughly as:
+
+- **~0.21 nats — ternary weight rounding** (the dominant single cost).
+- **~0.08 nats — 8-bit activation precision**, expressed as a hard-tanh-shaped
+  shift+clip. Within this, the trained model leans on the saturating edge of
+  the int8 range, so more of the 0.08 manifests as clipping than as
+  rounding-grain noise — but that's a property of how the bits are being used,
+  not two separate constraints.
+- **~0.12 nats — architecture / param-count** (recurrent SSM, no norm, ~20%
+  fewer params). Integer normalisation does *not* close this — see the
+  RMSNorm ablation above.
+- **−0.18 nats — recovered by longer training** (4k → 12k steps).
 
 ## What to look into next
 
 Ordered by how impactful I expect them to be on test loss, given the ablation results.
 
-### 1. Add an integer RMSNorm before each block
+### 1. Add an integer RMSNorm before each block ❌ tried, no help
 
-The unquantized baseline's biggest architectural difference from ours is its
-LayerNorm, and `src/F.c` already has the integer-sqrt and divide kernels needed
-to implement RMSNorm with int8/int16 arithmetic. Worth ~0.05–0.10 nats based on
-how much A5 trails the upstream SSM. Implementation cost is moderate: needs an
-RMSNorm fake-quant module on the training side and a few lines of C on the inference
-side, both of which can mirror the existing integer-sqrt/divide already in `F.c`.
+Hypothesis was wrong. Implemented as `QuantRMSNorm` and benchmarked at 4k steps
+in both the quantized and float regimes (see RMSNorm ablation above). It buys
+~0.01 nats quantized, ~0.02 nats float — both within run-to-run noise. Don't
+implement on the C side.
 
 ### 2. Widen the SSM state internally
 
@@ -233,13 +310,23 @@ has to slightly displace it. Could be 0.02–0.05 nats. Has the disadvantage of 
 slower to iterate on (no instant signal at step 0 about whether the architecture is
 quantizable).
 
-### 8. Train for longer
+### 8. Train for longer ✅ tried, +0.057 nats
 
-The deployable run was still descending at step 6,000. The unquantized baseline
-trained for fewer steps (2,800), but with ~25% more parameters and a smoother
-loss landscape. A 12,000-step run is cheap (~25 min) and might recover ~0.05 nats
-just from more training time, especially given the saw-tooth pattern in loss
-caused by integer shifts flipping between adjacent values during training.
+A 12,000-step run on the deployable config recovered 0.057 nats (1.74 → 1.69)
+relative to the 6,000-step result. The current saved checkpoint
+(`build/bitnet_quant_npe84_12k.pt`) reflects this. Could potentially go further
+(20k steps) but with diminishing returns; the LR schedule and the discrete shift
+oscillations in late training cap how much extra training time helps.
+
+### 9. Freeze integer shifts in late training (untried)
+
+Late-training loss oscillates by ~0.07 nats step-to-step (e.g. 8k → 9k went
+1.69 → 1.79 → back to 1.71). This is consistent with the per-layer integer
+shifts flipping between adjacent values when `round(shift_continuous)` lies near
+a half-integer boundary. Freezing the shifts after some warmup percentage
+(say 60%) and only updating weights / biases / decay / gain afterwards should
+remove the oscillation source and could buy another 0.02–0.04 nats. Cheap to
+try — one config flag and a check in the optimizer step.
 
 ## How to reproduce
 

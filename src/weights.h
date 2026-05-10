@@ -4,13 +4,15 @@
 
 #include "matrix.h"
 
-#define VOCAB_SIZE  27
-#define N_EMBD      84
-#define N_HIDDEN    168     /* in_proj output (gated) */
-#define N_LAYER     3
-#define STATE_SIZE  8
-#define CONV_KERNEL 4
-#define BLOCK_SIZE  64
+#define VOCAB_SIZE     27
+#define N_EMBD         81
+#define N_EMBD_PADDED  84      /* round up to a multiple of 4 */
+#define N_HIDDEN       162     /* in_proj output (gated) */
+#define N_HIDDEN_PADDED 164
+#define N_LAYER        3
+#define STATE_SIZE     8
+#define CONV_KERNEL    4
+#define BLOCK_SIZE     64
 
 /* Vocab table for converting token ids back to characters. */
 extern const char itos[VOCAB_SIZE];
@@ -23,11 +25,11 @@ struct block_weights {
     struct ternary_matrix *in_proj_W;
     struct int_matrix     *in_proj_bias;
     unsigned char          in_proj_shift;
-    struct ternary_matrix *conv_W;
+    struct int4_matrix    *conv_W;
     unsigned char          conv_shift;
     struct char_matrix    *decay;
     struct ternary_matrix *B;
-    struct ternary_matrix *C_mat;
+    struct int4_matrix    *C_mat;
     struct char_matrix    *D;
     unsigned char          ssm_out_shift;
     unsigned char          d_shift;
@@ -45,20 +47,22 @@ struct block_state {
 extern struct block_weights blocks[N_LAYER];
 extern struct block_state   block_states[N_LAYER];
 
-/* Head: ternary_linear with no bias, learned shift (argmax-invariant). */
-extern struct ternary_matrix head_W;
+/* Head: int4 weight, no bias, learned shift; emits int16 logits. */
+extern struct int4_matrix head_W;
 extern const unsigned char head_shift;
 
-/* Scratch buffers shared across the inference path. */
-extern struct char_matrix x_buf;          /* (1, N_EMBD)  residual stream */
-extern struct char_matrix proj_buf;       /* (1, N_HIDDEN) in_proj output */
-extern struct char_matrix u_buf;          /* (1, N_EMBD)  pre-conv u */
-extern struct char_matrix gate_buf;       /* (1, N_EMBD)  gate */
-extern struct char_matrix u_post_conv;    /* (1, N_EMBD)  post-conv u */
-extern struct char_matrix y_buf;          /* (1, N_EMBD)  ssm output */
-extern struct char_matrix y_gated;        /* (1, N_EMBD)  post-gate */
-extern struct char_matrix y_outproj;      /* (1, N_EMBD)  post out_proj */
+/* Scratch buffers shared across the inference path. Buffers that feed
+ * into ternary_linear / int4_logits are over-allocated to N_EMBD_PADDED
+ * so the inner loops can safely read past the logical width onto zeros. */
+extern struct char_matrix x_buf;          /* (N_EMBD, 1)  residual stream */
+extern struct char_matrix proj_buf;       /* (N_HIDDEN, 1) in_proj output */
+extern struct char_matrix u_buf;          /* (N_EMBD, 1)  pre-conv u */
+extern struct char_matrix gate_buf;       /* (N_EMBD, 1)  gate */
+extern struct char_matrix u_post_conv;    /* (N_EMBD, 1)  post-conv u */
+extern struct char_matrix y_buf;          /* (N_EMBD, 1)  ssm output */
+extern struct char_matrix y_gated;        /* (N_EMBD, 1)  post-gate */
+extern struct char_matrix y_outproj;      /* (N_EMBD, 1)  post out_proj */
 extern struct int_matrix  tmp_int;        /* (N_HIDDEN, 1) ternary_linear scratch */
-extern struct int_matrix  logits;         /* (1, VOCAB_SIZE) */
+extern struct int_matrix  logits;         /* (VOCAB_SIZE, 1) */
 
 #endif

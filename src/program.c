@@ -6,7 +6,7 @@
 #include "model.h"
 
 #define N_GENERATE 200
-#define TOP_K       8
+#define TOP_K       3
 
 int main(void) {
     unsigned char tok = 0;        /* prompt: " " (token id 0) */

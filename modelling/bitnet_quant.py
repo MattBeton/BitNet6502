@@ -53,6 +53,8 @@ class Config:
     conv_kernel: int = 4
     use_gate: bool = True
     use_pos_embed: bool = True
+    use_rmsnorm: bool = False          # pre-norm before each block (int RMSNorm + per-channel int8 gain)
+    rmsnorm_init_gain: float = 32.0    # learned gain init; ~int8-scaled output
     dropout: float = 0.02
     learning_rate: float = 2.0e-3
     min_learning_rate: float = 1e-4
@@ -182,6 +184,43 @@ def floor_div_pow2(x: torch.Tensor, shift_const: int) -> torch.Tensor:
     return smooth + (hard - smooth).detach()
 
 
+def trunc_div(num: torch.Tensor, den: torch.Tensor) -> torch.Tensor:
+    """Round-toward-zero division, matching C's signed/unsigned divide."""
+    return torch.trunc(num / den)
+
+
+def int_rms_norm(x: torch.Tensor, gain: torch.Tensor) -> torch.Tensor:
+    """RMSNorm with integer-faithful forward path.
+
+    Mirrors `rms_norm` in src/F.c plus a learned per-channel int8 gain:
+        sq_sum   = sum(x[c]^2 for c in range(C))     # int (fits int32)
+        mean_sq  = sq_sum // C                        # int floor-div
+        rms      = floor_sqrt(mean_sq).clamp(1, 255)  # uint8
+        y[c]     = saturate_int8(trunc((x[c] * gain[c]) / rms))
+
+    Forward returns the exact int8 result. Backward flows through a smooth
+    `x * gain / rms_smooth` so both x and gain receive informative grads.
+    """
+    if _ABLATION["float_acts"]:
+        # Pure float RMSNorm for the all-float ablation
+        rms = torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + 1e-6)
+        return x * gain / rms
+
+    C = x.shape[-1]
+    sq_sum = (x * x).sum(dim=-1, keepdim=True)
+    mean_sq_smooth = (sq_sum + 1.0) / C
+    mean_sq_hard   = torch.floor(sq_sum / C)
+
+    rms_smooth = torch.sqrt(mean_sq_smooth.clamp(min=1.0))
+    rms_hard   = torch.floor(torch.sqrt(mean_sq_hard.clamp(min=0.0))).clamp(min=1.0, max=255.0)
+    rms = rms_smooth + (rms_hard - rms_smooth).detach()
+
+    g = fake_quant_int8(gain)
+    smooth = x * g / rms
+    hard   = torch.clamp(trunc_div(x * g, rms), -128.0, 127.0)
+    return smooth + (hard - smooth).detach()
+
+
 def learned_shift_no_sat(acc: torch.Tensor, shift_param: torch.Tensor) -> torch.Tensor:
     """Learned right-shift, no saturation. For the head: argmax is invariant
     to a positive scale, so the shift is purely a training-time scaling knob.
@@ -246,6 +285,17 @@ class QuantHead(nn.Module):
         return self.weight.numel()
 
 
+class QuantRMSNorm(nn.Module):
+    """Integer-faithful RMSNorm with per-channel int8 learned gain."""
+
+    def __init__(self, n_embd: int, init_gain: float = 32.0) -> None:
+        super().__init__()
+        self.gain = nn.Parameter(torch.full((n_embd,), init_gain))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return int_rms_norm(x, self.gain)
+
+
 class QuantSSMLayer(nn.Module):
     """Recurrent diagonal SSM with ternary projections and int8 state."""
 
@@ -256,6 +306,12 @@ class QuantSSMLayer(nn.Module):
         self.state_size = state_size
         self.conv_kernel = conv_kernel
         self.use_gate = use_gate
+        self.use_rmsnorm = cfg.use_rmsnorm
+
+        if cfg.use_rmsnorm:
+            self.norm = QuantRMSNorm(n_embd, init_gain=cfg.rmsnorm_init_gain)
+        else:
+            self.norm = None
 
         proj_out = 2 * n_embd if use_gate else n_embd
         self.in_proj = QuantTernaryLinear(n_embd, proj_out, init_shift=cfg.init_shift_in_proj)
@@ -284,6 +340,8 @@ class QuantSSMLayer(nn.Module):
     def forward(self, x: torch.Tensor, state: torch.Tensor | None = None
                 ) -> tuple[torch.Tensor, torch.Tensor]:
         residual = x
+        if self.norm is not None:
+            x = self.norm(x)
         projected = self.in_proj(x)
         if self.use_gate:
             u, gate = projected.chunk(2, dim=-1)

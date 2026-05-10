@@ -340,9 +340,191 @@ void vec_mul_shift_sat(struct char_matrix *a,
     }
 }
 
+/* Sign-extend a 4-bit nibble (low 4 bits of byte) to a signed char in [-8, +7].
+ * Trained model only uses [-7, +7] but the ALU handles -8 the same way. */
+static signed char unpack_nibble(unsigned char nib) {
+    signed char v = (signed char)(nib & 0x0F);
+    if (v & 0x08) v = (signed char)(v | 0xF0);
+    return v;
+}
+
+/* int8 input · int4 weight ([-7, +7]) → int16 logits >> shift, no bias, no sat.
+ * Used for the head: fan-in is N_EMBD=81, weights up to ±7, activations up to
+ * ±127, so |acc| can reach ~72k — too big for int16. Accumulator is therefore
+ * signed long (32-bit on cc65). After the shift, results fit int16 comfortably
+ * for the trained model (head_shift ≈ 6 → |out| ≲ 1125). We do not saturate so
+ * argmax works correctly.
+ *   W:    int4 (out_f, in_f).  Packed row = (in_f + 1) / 2 bytes, low nibble first.
+ *   x:    int8 (in_f, seq_len). Caller must zero-pad to ((in_f + 1) & ~1) - 1.
+ *   out:  int16 (out_f, seq_len) — pre-allocated.
+ */
+void int4_logits(struct int4_matrix *W,
+                 struct char_matrix *x,
+                 unsigned char       shift,
+                 struct int_matrix  *out) {
+    unsigned char w_packed = (W->width + 1) >> 1;   /* bytes per packed row */
+    signed long   acc;
+    signed int    xv;
+    signed char   wv;
+    unsigned char nib;
+
+    if (W->width != x->height || out->height != W->height || out->width != x->width) {
+        printf("int4_logits: shape mismatch W=%dx%d x=%dx%d out=%dx%d\n",
+               W->height, W->width, x->height, x->width, out->height, out->width);
+        return;
+    }
+
+    for (i = 0; i < W->height; i++) {
+        for (j = 0; j < x->width; j++) {
+            acc = 0;
+
+            for (k = 0; k < w_packed; k++) {
+                b = W->data[i * w_packed + k];
+
+                /* Low nibble: column index 2*k */
+                nib = b & 0x0F;
+                wv = unpack_nibble(nib);
+                if (wv) {
+                    xv = (signed int)x->data[j + x->width * (2 * k)];
+                    acc += (signed long)wv * (signed long)xv;
+                }
+
+                /* High nibble: column index 2*k + 1 (zero-padded if odd width) */
+                nib = (b >> 4) & 0x0F;
+                wv = unpack_nibble(nib);
+                if (wv) {
+                    xv = (signed int)x->data[j + x->width * (2 * k + 1)];
+                    acc += (signed long)wv * (signed long)xv;
+                }
+            }
+
+            out->data[i * out->width + j] = (signed int)(acc >> shift);
+        }
+    }
+}
+
+/* Causal depthwise conv1d, int4 kernel. Per channel:
+ *   acc = sum_k W[c, k] * window[k, c];   out[c] = sat_int8(acc >> shift)
+ * K must be a multiple of 2; the trained model has K=4 (one int4 byte = two
+ * weights, two bytes per row). int16 accumulator fits comfortably:
+ * 4 × 127 × 7 = 3556 ≪ 32767.
+ */
+void int4_depthwise_conv1d_step(struct char_matrix *window,
+                                struct int4_matrix *W,
+                                unsigned char       shift,
+                                struct char_matrix *out) {
+    char K     = W->width;
+    char C_dim = W->height;
+    unsigned char w_packed = (K + 1) >> 1;
+    signed char wv;
+    signed int  wval;
+
+    if (window->height != K || window->width != C_dim ||
+        (unsigned int)out->height * (unsigned int)out->width != (unsigned int)C_dim) {
+        printf("int4_depthwise_conv1d_step: shape mismatch K=%d C=%d\n", K, C_dim);
+        return;
+    }
+
+    for (i = 0; i < C_dim; i++) {
+        a = 0;
+        for (k = 0; k < w_packed; k++) {
+            b = W->data[i * w_packed + k];
+
+            wv = unpack_nibble(b & 0x0F);
+            if (wv) {
+                wval = (signed int)window->data[(2 * k) * C_dim + i];
+                a += (signed int)wv * wval;
+            }
+            wv = unpack_nibble((b >> 4) & 0x0F);
+            if (wv) {
+                wval = (signed int)window->data[(2 * k + 1) * C_dim + i];
+                a += (signed int)wv * wval;
+            }
+        }
+        out->data[i] = shift_sat_int8(a, shift);
+    }
+}
+
+/* Diagonal SSM with int4 C readout. Phase 1 (state update) is identical to
+ * ssm_step — B is still ternary. Phase 2 reads C as int4 nibbles instead.
+ * S must be a multiple of 2 (we have S=8). int16 accumulator fits:
+ * 8 × 127 × 7 = 7112 ≪ 32767.
+ */
+void ssm_step_int4_C(struct char_matrix    *u_t,
+                     struct char_matrix    *ssm_state,
+                     struct char_matrix    *decay,
+                     struct ternary_matrix *B,
+                     struct int4_matrix    *C_mat,
+                     struct char_matrix    *D,
+                     unsigned char          ssm_out_shift,
+                     unsigned char          d_shift,
+                     struct char_matrix    *y_t) {
+    char C_dim = ssm_state->height;
+    char S = ssm_state->width;
+    char S_pack_t = S / 4;          /* B is ternary: 4 vals/byte */
+    char S_pack_4 = (S + 1) >> 1;   /* C is int4:    2 vals/byte */
+    signed int prod;
+    signed int u_val;
+    signed char d_part_v;
+    signed char wv;
+
+    /* Phase 1: state update (same as ssm_step, B ternary) */
+    for (i = 0; i < C_dim; i++) {
+        u_val = (signed int)u_t->data[i];
+        for (k = 0; k < S_pack_t; k++) {
+            b = B->data[i * S_pack_t + k];
+            for (l = 0; l < 4; l++) {
+                char s_idx = 4 * k + l;
+                signed int dec = (signed int)decay->data[i * S + s_idx]
+                               * (signed int)ssm_state->data[i * S + s_idx];
+                dec = dec >> 7;
+                switch (b & 0b11) {
+                    case 0b00: break;
+                    case 0b01: dec += u_val; break;
+                    case 0b10: dec -= u_val; break;
+                }
+                if (dec > SCHAR_MAX) dec = SCHAR_MAX;
+                else if (dec < SCHAR_MIN) dec = SCHAR_MIN;
+                ssm_state->data[i * S + s_idx] = (signed char)dec;
+                b = b >> 2;
+            }
+        }
+    }
+
+    /* Phase 2: output — c_state[c] = sum_s int4(C[c,s]) * state[c,s] */
+    for (i = 0; i < C_dim; i++) {
+        u_val = (signed int)u_t->data[i];
+
+        a = 0;
+        for (k = 0; k < S_pack_4; k++) {
+            b = C_mat->data[i * S_pack_4 + k];
+
+            wv = unpack_nibble(b & 0x0F);
+            if (wv) {
+                signed int sv = (signed int)ssm_state->data[i * S + (2 * k)];
+                a += (signed int)wv * sv;
+            }
+            wv = unpack_nibble((b >> 4) & 0x0F);
+            if (wv) {
+                signed int sv = (signed int)ssm_state->data[i * S + (2 * k + 1)];
+                a += (signed int)wv * sv;
+            }
+        }
+
+        prod = (signed int)D->data[i] * u_val;
+        d_part_v = shift_sat_int8(prod, d_shift);
+        a = (signed int)shift_sat_int8(a, ssm_out_shift) + (signed int)d_part_v;
+        if (a > SCHAR_MAX) a = SCHAR_MAX;
+        else if (a < SCHAR_MIN) a = SCHAR_MIN;
+        y_t->data[i] = (signed char)a;
+    }
+}
+
 // out := sat_int8((W @ x + bias) >> shift)
-//   W:    ternary (out_f, in_f), in_f must be a multiple of 4
-//   x:    int8    (in_f, seq_len)  — column-by-column
+//   W:    ternary (out_f, in_f). in_f may be any positive integer; packed row
+//         size is (in_f + 3) / 4 bytes with the trailing 1..3 nibbles zero.
+//   x:    int8    (in_f, seq_len)  — column-by-column. Caller must zero-pad
+//         the data buffer up to index ((in_f + 3) & ~3) - 1.
 //   bias: int16   (out_f,)         — one int16 per output row, broadcast across seq_len
 //   shift: per-layer learned right-shift amount
 //   out:  int8    (out_f, seq_len) — pre-allocated by caller
@@ -353,6 +535,8 @@ void ternary_linear(struct ternary_matrix *W,
                     struct int_matrix     *bias,
                     unsigned char          shift,
                     struct char_matrix    *out) {
+    unsigned char w_packed = (W->width + 3) >> 2;   /* bytes per packed row */
+
     if (W->width != x->height || out->height != W->height || out->width != x->width) {
         printf("ternary_linear: shape mismatch W=%dx%d x=%dx%d out=%dx%d\n",
                W->height, W->width, x->height, x->width, out->height, out->width);
@@ -364,8 +548,8 @@ void ternary_linear(struct ternary_matrix *W,
             // Initialise with bias (broadcast across the sequence dimension)
             a = bias->data[i];
 
-            for (k = 0; k < W->width / 4; k++) {
-                b = W->data[i * (W->width / 4) + k];
+            for (k = 0; k < w_packed; k++) {
+                b = W->data[i * w_packed + k];
 
                 for (l = 0; l < 4; l++) {
                     switch (b & 0b11) {

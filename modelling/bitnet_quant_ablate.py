@@ -32,6 +32,12 @@ ABLATIONS: list[tuple[str, dict]] = [
     ("A5_all_float",          dict(ablate_float_weights=True,
                                    ablate_float_acts=True,
                                    ablate_no_saturate=True)),           # float reference
+    # RMSNorm ablation (added later) — same architecture, with pre-norm before each block.
+    ("A0_full_quant_rms",     dict(use_rmsnorm=True)),
+    ("A5_all_float_rms",      dict(use_rmsnorm=True,
+                                   ablate_float_weights=True,
+                                   ablate_float_acts=True,
+                                   ablate_no_saturate=True)),
 ]
 
 
