@@ -14,9 +14,12 @@ build/bbc/
 build/*.uef
 build/*.wav
 build/*.pt
-# Exception: the deployable TinyStories checkpoint (~295 KB) is checked in
-# so downstream builds are reproducible without re-training.
+# Exception: the deployable TinyStories checkpoints are checked in so downstream
+# builds are reproducible without re-training.
+#   _tinystories_final.pt — n_embd=81 reference SoTA model (valid 0.90, too big for BBC)
+#   _n56_full.pt          — n_embd=56 BBC-deployable model  (valid 1.03, used by build/bitnet.uef)
 !build/bitnet_quant_tinystories_final.pt
+!build/bitnet_quant_n56_full.pt
 build/*.sim6502
 build/*.apple2
 build/*.bbc
