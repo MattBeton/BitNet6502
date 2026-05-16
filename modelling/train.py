@@ -97,15 +97,25 @@ def train(
     save_path: str | Path | None = None,
     device_override: str | None = None,
     verbose: bool = True,
+    vocab_path: str | Path | None = None,
+    dedup_names: bool = False,
+    init_from: str | Path | None = None,
 ) -> tuple[BitNetLM, Vocabulary, dict[str, float]]:
     """Train a BitNetLM on TinyStories and (optionally) save the checkpoint.
 
     Returns (model, vocab, final_losses). final_losses has keys
     {'train', 'valid', 'gn_max', 'gn_avg'}.
+
+    `vocab_path` overrides the default top-500 word filter; `dedup_names` collapses
+    known character names to a single canonical name before tokenising;
+    `init_from` loads a previous checkpoint into the model (fine-tune mode).
     """
     device = resolve_device(device_override)
 
-    train_ds, valid_ds, vocab = build_datasets(block_size=model_cfg.block_size)
+    ds_kwargs: dict = {"dedup_names": dedup_names}
+    if vocab_path is not None:
+        ds_kwargs["vocab_path"] = vocab_path
+    train_ds, valid_ds, vocab = build_datasets(block_size=model_cfg.block_size, **ds_kwargs)
     g = torch.Generator()
     g.manual_seed(1337)
     train_loader = DataLoader(
@@ -125,6 +135,11 @@ def train(
 
     torch.manual_seed(1337)
     model = BitNetLM(model_cfg).to(device)
+    if init_from is not None:
+        if verbose:
+            print(f"loading pretrained weights from {init_from}", flush=True)
+        ckpt = torch.load(str(init_from), map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
     total = sum(p.numel() for p in model.parameters())
     if verbose:
         print(
@@ -262,6 +277,12 @@ def main() -> None:
                    help="Path to save the final checkpoint (also writes _ckpt.pt at every eval).")
     p.add_argument("--device", type=str, default=None,
                    help="Override device autodetect: 'mps' | 'cuda' | 'cpu'.")
+    p.add_argument("--vocab-path", type=str, default=None,
+                   help="Filter-vocab file (default: tinystories_vocab_top500.txt).")
+    p.add_argument("--dedup-names", action="store_true",
+                   help="Map known character names to single canonical 'lily' before tokenising.")
+    p.add_argument("--init-from", type=str, default=None,
+                   help="Pretrained checkpoint to load model weights from (fine-tune mode).")
     args = p.parse_args()
 
     model_cfg = ModelConfig(n_embd=args.n_embd, block_size=args.block_size)
@@ -279,10 +300,18 @@ def main() -> None:
     print(f"BitNet training: n_embd={model_cfg.n_embd}  steps={train_cfg.num_steps}")
     print(f"  lr={train_cfg.learning_rate}  wd={train_cfg.weight_decay}  "
           f"freeze_at={train_cfg.freeze_shift_at_frac}")
+    if args.vocab_path:
+        print(f"  vocab_path={args.vocab_path}")
+    if args.dedup_names:
+        print(f"  dedup_names=True")
+    if args.init_from:
+        print(f"  init_from={args.init_from}")
     print(f"{'='*70}")
 
     t0 = time.time()
-    _, _, losses = train(model_cfg, train_cfg, save_path=args.save, device_override=args.device)
+    _, _, losses = train(model_cfg, train_cfg, save_path=args.save, device_override=args.device,
+                         vocab_path=args.vocab_path, dedup_names=args.dedup_names,
+                         init_from=args.init_from)
     elapsed = time.time() - t0
     print(f"\ndone: train={losses['train']:.4f}  valid={losses['valid']:.4f}  ({elapsed:.0f}s)")
 

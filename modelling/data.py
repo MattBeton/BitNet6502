@@ -76,6 +76,24 @@ _KEEP_RE = re.compile(r"[^a-z ]")
 _WS_RE = re.compile(r"\s+")
 _TERMINATOR_RE = re.compile(r"[.!?]+")
 
+# Names appearing in the top-500 TinyStories vocab. When the `dedup_names`
+# flag is on, every occurrence of one of these is rewritten to the canonical
+# name *before* the vocab-filter check — so stories using rare names like
+# "billy" no longer get dropped, and the model only ever sees one character
+# name. Used by post-training/fine-tune runs to free model capacity that
+# would otherwise be spent disambiguating multiple names.
+DEDUP_NAMES: frozenset[str] = frozenset({
+    "lily", "tom", "ben", "timmy", "tim", "sam", "anna", "max", "jack",
+    "mia", "lucy", "john", "bob", "sue", "sarah", "jane", "joe", "daisy",
+    "teddy", "benny", "billy",
+})
+DEDUP_NAME_CANONICAL = "lily"
+
+
+def _apply_name_dedup(text: str) -> str:
+    """Replace any whole-word match of a name in DEDUP_NAMES with the canonical name."""
+    return " ".join(DEDUP_NAME_CANONICAL if w in DEDUP_NAMES else w for w in text.split())
+
 
 # ----------------------------------------------------------------------------- #
 # Text normalisation
@@ -141,7 +159,8 @@ def _file_signature(path: Path) -> dict:
     return {"path": str(path), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
 
 
-def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str]) -> dict:
+def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str],
+               *, dedup_names: bool = False) -> dict:
     digest = hashlib.sha256("\n".join(vocab_words).encode("utf-8")).hexdigest()
     return {
         "source": _file_signature(source_path),
@@ -150,6 +169,10 @@ def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str]) 
         "vocab_sha256": digest,
         "normalize_version": NORMALIZE_VERSION,
         "alphabet": CHAR_ALPHABET,
+        "dedup_names": dedup_names,
+        "dedup_names_sha256": hashlib.sha256(
+            "\n".join(sorted(DEDUP_NAMES)).encode("utf-8")
+        ).hexdigest() if dedup_names else None,
     }
 
 
@@ -157,9 +180,16 @@ def filter_and_tokenize_stream(
     source_path: Path,
     vocab_words: Sequence[str],
     progress_every: int = 500_000,
+    *,
+    dedup_names: bool = False,
 ) -> np.ndarray:
     """Stream `source_path`, keep sentences whose words are all in `vocab_words`,
-    join them with single spaces, and return an int8 array of char-token ids."""
+    join them with single spaces, and return an int8 array of char-token ids.
+
+    If `dedup_names=True`, all known character names (DEDUP_NAMES) are mapped
+    to a single canonical name (DEDUP_NAME_CANONICAL) before the vocab-filter
+    check. This frees model capacity from disambiguating multiple names and
+    admits stories that would otherwise be dropped for using less-common ones."""
     word_set = set(vocab_words)
     stoi = CHAR_VOCAB.stoi
     pieces: list[str] = []
@@ -174,6 +204,8 @@ def filter_and_tokenize_stream(
                 text = normalize_text(piece)
                 if not text:
                     continue
+                if dedup_names:
+                    text = _apply_name_dedup(text)
                 n_total += 1
                 if all(w in word_set for w in text.split()):
                     pieces.append(text)
@@ -210,23 +242,25 @@ def filtered_tokens_with_cache(
     cache_dir: str | Path = DEFAULT_CACHE_DIR,
     *,
     rebuild: bool = False,
+    dedup_names: bool = False,
 ) -> np.ndarray:
     """Load filtered+tokenised stream from cache, or build it and cache.
 
-    Cache invalidates automatically when the source file, the vocab file, or
-    `NORMALIZE_VERSION` changes.
+    Cache invalidates automatically when the source file, the vocab file,
+    `NORMALIZE_VERSION`, or `dedup_names` changes.
     """
     source_path = Path(source_path)
     vocab_path = Path(vocab_path)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = f"{source_path.stem}__{vocab_path.stem}"
+    suffix = "__dedup" if dedup_names else ""
+    stem = f"{source_path.stem}__{vocab_path.stem}{suffix}"
     tokens_path = cache_dir / f"{stem}.tokens.npy"
     meta_path = cache_dir / f"{stem}.meta.json"
 
     vocab_words = load_word_vocab(vocab_path)
-    key = _cache_key(source_path, vocab_path, vocab_words)
+    key = _cache_key(source_path, vocab_path, vocab_words, dedup_names=dedup_names)
 
     if not rebuild and tokens_path.exists() and meta_path.exists():
         try:
@@ -239,7 +273,7 @@ def filtered_tokens_with_cache(
         print(f"cache stale: {tokens_path.name} (rebuilding)")
 
     print(f"building cache: {tokens_path.name}")
-    tokens = filter_and_tokenize_stream(source_path, vocab_words)
+    tokens = filter_and_tokenize_stream(source_path, vocab_words, dedup_names=dedup_names)
     np.save(tokens_path, tokens)
     meta_path.write_text(json.dumps(key, indent=2), encoding="utf-8")
     print(
@@ -262,13 +296,14 @@ def build_datasets(
     vocab_path: str | Path = DEFAULT_VOCAB_PATH,
     cache_dir: str | Path = DEFAULT_CACHE_DIR,
     rebuild_cache: bool = False,
+    dedup_names: bool = False,
 ) -> tuple[Dataset, Dataset, Vocabulary]:
     """Build (train, valid, vocab) datasets ready to feed into a DataLoader."""
     train_tokens = filtered_tokens_with_cache(
-        train_path, vocab_path, cache_dir, rebuild=rebuild_cache
+        train_path, vocab_path, cache_dir, rebuild=rebuild_cache, dedup_names=dedup_names,
     )
     valid_tokens = filtered_tokens_with_cache(
-        valid_path, vocab_path, cache_dir, rebuild=rebuild_cache
+        valid_path, vocab_path, cache_dir, rebuild=rebuild_cache, dedup_names=dedup_names,
     )
     train_ds = TokenStreamDataset(train_tokens, block_size=block_size)
     valid_ds = TokenStreamDataset(valid_tokens, block_size=block_size)
