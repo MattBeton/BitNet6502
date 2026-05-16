@@ -1,0 +1,35 @@
+
+======================================================================
+FINAL RUN: n_embd=81  bytes=23652 / 23770
+  freeze_shift_after_frac=0.5  anneal=True
+  int4_head=True  int4_ssm_C=True  int4_conv=True
+  tie_embeddings=False  num_steps=20000
+======================================================================
+device: mps
+vocab size: 27
+total parameters: 71,218  ternary: 66,096
+step     0 | lr 2.00e-06 | train 4.0815 | test 4.0382 |   4.0s
+step  1000 | lr 2.00e-03 | train 1.8811 | test 1.8801 | 113.2s
+step  2000 | lr 1.99e-03 | train 1.7474 | test 1.7272 | 221.5s
+step  3000 | lr 1.95e-03 | train 1.6491 | test 1.6392 | 330.8s
+step  4000 | lr 1.89e-03 | train 1.5855 | test 1.5711 | 440.9s
+step  5000 | lr 1.80e-03 | train 1.5449 | test 1.5350 | 551.0s
+step  6000 | lr 1.69e-03 | train 1.5971 | test 1.5898 | 661.8s
+step  7000 | lr 1.57e-03 | train 1.6156 | test 1.6054 | 777.2s
+step  8000 | lr 1.43e-03 | train 1.6157 | test 1.6091 | 891.1s
+step  9000 | lr 1.28e-03 | train 1.6365 | test 1.6298 | 1005.5s
+  [final] step 10000: froze 19 shift params
+step 10000 | lr 1.13e-03 | train 1.6488 | test 1.6431 | 1118.7s
+step 11000 | lr 9.72e-04 | train 1.6128 | test 1.5945 | 1215.6s
+step 12000 | lr 8.17e-04 | train 1.6099 | test 1.5972 | 1312.6s
+step 13000 | lr 6.68e-04 | train 1.6020 | test 1.5843 | 1410.3s
+step 14000 | lr 5.30e-04 | train 1.5898 | test 1.5613 | 1507.0s
+step 15000 | lr 4.07e-04 | train 1.5837 | test 1.5709 | 1603.8s
+step 16000 | lr 3.00e-04 | train 1.5810 | test 1.5661 | 1699.5s
+step 17000 | lr 2.14e-04 | train 1.5774 | test 1.5565 | 1796.8s
+step 18000 | lr 1.51e-04 | train 1.5784 | test 1.5680 | 1893.6s
+step 19000 | lr 1.13e-04 | train 1.5720 | test 1.5689 | 1990.1s
+step 19999 | lr 1.00e-04 | train 1.5727 | test 1.5425 | 2086.6s
+
+[final] test_loss=1.5425  train=1.5727  (2087s)
+  saved checkpoint → build/bitnet_quant_final_v3.pt

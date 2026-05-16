@@ -6,3 +6,28 @@ build/program
 program*
 
 build/*.o
+build/*.s
+build/*.map
+build/bbc/
+
+# Large build artifacts not worth committing.
+build/*.uef
+build/*.wav
+build/*.pt
+build/*.sim6502
+build/*.apple2
+build/*.bbc
+build/*_train.log
+build/test_harness.*
+
+# Regeneratable filtered/tokenized dataset caches (rebuilt by tinystories.py).
+modelling/data/cache/
+
+# Source TinyStories data — too large for git (~2 GB train).
+modelling/data/TinyStories-*.txt
+
+# Claude / agent scratch.
+.claude/
+CLAUDE.md
+*_DEBUG_REPORT.md
+*_TOKENIZER_REPORT.md

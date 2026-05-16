@@ -1,0 +1,16 @@
+
+=== E3: recalibrated A1 (float weights, std-matched init), 4000 steps ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+step     0 | lr 6.67e-06 | train 4.9051 | test 4.8979 |   4.1s
+step   600 | lr 1.97e-03 | train 1.9753 | test 1.9762 |  73.9s
+step  1200 | lr 1.74e-03 | train 1.8347 | test 1.8287 | 143.2s
+step  1800 | lr 1.33e-03 | train 1.6796 | test 1.6674 | 211.3s
+step  2400 | lr 8.50e-04 | train 1.6441 | test 1.6276 | 279.6s
+step  3000 | lr 4.22e-04 | train 1.6567 | test 1.6445 | 349.5s
+step  3600 | lr 1.54e-04 | train 1.7349 | test 1.7095 | 418.5s
+step  3999 | lr 1.00e-04 | train 1.6396 | test 1.6268 | 465.1s
+
+[E3] final test_loss=1.6268  train=1.6396
+  [done] E3 in 465s

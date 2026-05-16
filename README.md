@@ -2,7 +2,7 @@
 
 Goal: a language model that can run on a 6502 processor. 
 
-The 6502 processor is an 8-bit (integer-only) processor with 32KB of addressable ROM. It was the processor in the Apple-II and the BBC Micro. The processor operates at a clock speed of 2 MHz.
+The 6502 processor is an 8-bit (integer-only) processor with 32KB of addressable RAM. It was the processor in the Apple-II and the BBC Micro. The processor operates at a clock speed of 2 MHz.
 
 This goal splits into a number of sub-requirements:
 
@@ -48,3 +48,16 @@ To extend this pattern when adding a new C function:
 # TODO
 
 - Switch from int to int16 (current `int` is default to 32-bit int, which is overkill.)
+- Proper random sampling!
+
+## Modelling
+
+- Bring layernorm back? Can we do this at int quant? If so, will probably provide a decent perf boost.
+- Why is the [-127,128] clip causing an issue? Is this not equivalent to an activation function? All this leads me to is that there's an issue with the loss of dynamic range? In that case maybe we should consider scaling up to int16 accumulate into int32... I'm not sure how much perf drop that would lead to on the 6502.
+- Quantization annealing - start in full float and then anneal to int8 - could even just see this as a pretrain+finetune stage, finetuning each layer/weight one-by-one
+- are our in/out embeddings tied?
+- Is the gating really that important? Because we are doubling the size of `in_proj` in order to do the gating. This is one of our largest contributors.
+
+## Long-term
+
+- Once we have a better idea of the optimization space, we could use a massive parallel training run over the full optimization space to just gridsearch the entire thing. Because really how many flops does it take to train this thing? It's tiny; it's probably a completely trivial number of s.

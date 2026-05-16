@@ -1,0 +1,46 @@
+
+======================================================================
+TinyStories run: n_embd=81  bytes=23652 / 23770
+  steps=5000  bs=128  block=64
+  freeze_shift_after_frac=0.5  anneal=False
+  int4_head=True  int4_ssm_C=True  int4_conv=True
+  tie_embeddings=False
+  weight_decay=0.01  dropout=0.0
+======================================================================
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+device: mps
+vocab size: 27
+train windows: 336,609,484
+valid windows: 3,339,198
+total parameters: 71,218  ternary: 66,096
+step      0 | lr 6.67e-06 | train 4.1507 | valid 4.1487 | gn_avg   1.07 gn_max    1.07 |   17.4s
+step    200 | lr 1.34e-03 | train 3.6498 | valid 3.6418 | gn_avg   0.90 gn_max    1.08 |   50.6s
+step    400 | lr 2.00e-03 | train 2.0688 | valid 2.1006 | gn_avg   0.52 gn_max    3.76 |   83.6s
+step    600 | lr 1.98e-03 | train 1.5493 | valid 1.5551 | gn_avg   0.22 gn_max    2.61 |  116.9s
+step    800 | lr 1.95e-03 | train 1.3793 | valid 1.3744 | gn_avg   0.17 gn_max    0.50 |  145.4s
+step   1000 | lr 1.90e-03 | train 1.3479 | valid 1.3058 | gn_avg   0.16 gn_max    0.31 |  178.7s
+step   1200 | lr 1.83e-03 | train 1.2954 | valid 1.2558 | gn_avg   0.25 gn_max    0.76 |  212.1s
+step   1400 | lr 1.75e-03 | train 1.2727 | valid 1.2262 | gn_avg   0.44 gn_max    2.88 |  246.3s
+step   1600 | lr 1.66e-03 | train 1.2027 | valid 1.2691 | gn_avg   0.46 gn_max    1.78 |  274.9s
+step   1800 | lr 1.56e-03 | train 1.2617 | valid 1.1697 | gn_avg   0.71 gn_max   10.61 |  307.9s
+step   2000 | lr 1.45e-03 | train 1.2210 | valid 1.2028 | gn_avg   1.17 gn_max    8.08 |  341.0s
+step   2200 | lr 1.33e-03 | train 1.1590 | valid 1.2970 | gn_avg   0.92 gn_max    4.52 |  369.4s
+step   2400 | lr 1.21e-03 | train 1.1041 | valid 1.4127 | gn_avg   0.78 gn_max    3.13 |  402.5s
+  [final] step 2500: froze 19 shift params
+step   2600 | lr 1.08e-03 | train 1.1142 | valid 1.0970 | gn_avg   0.35 gn_max    2.46 |  429.4s
+step   2800 | lr 9.55e-04 | train 1.1168 | valid 1.1049 | gn_avg   0.06 gn_max    0.08 |  449.8s
+step   3000 | lr 8.30e-04 | train 1.1174 | valid 1.0672 | gn_avg   0.06 gn_max    0.08 |  470.4s
+step   3200 | lr 7.09e-04 | train 1.1123 | valid 1.0666 | gn_avg   0.06 gn_max    0.08 |  491.1s
+step   3400 | lr 5.93e-04 | train 1.0466 | valid 1.0588 | gn_avg   0.06 gn_max    0.08 |  511.6s
+step   3600 | lr 4.86e-04 | train 1.0543 | valid 1.0472 | gn_avg   0.06 gn_max    0.08 |  532.2s
+step   3800 | lr 3.90e-04 | train 1.0623 | valid 1.0534 | gn_avg   0.06 gn_max    0.09 |  552.8s
+step   4000 | lr 3.04e-04 | train 1.0529 | valid 1.0463 | gn_avg   0.06 gn_max    0.08 |  573.4s
+step   4200 | lr 2.33e-04 | train 1.0608 | valid 1.0387 | gn_avg   0.06 gn_max    0.08 |  593.9s
+step   4400 | lr 1.75e-04 | train 1.0717 | valid 1.0522 | gn_avg   0.06 gn_max    0.08 |  614.2s
+step   4600 | lr 1.34e-04 | train 1.0501 | valid 1.0321 | gn_avg   0.06 gn_max    0.07 |  634.7s
+step   4800 | lr 1.08e-04 | train 1.0222 | valid 1.0333 | gn_avg   0.06 gn_max    0.08 |  655.2s
+step   4999 | lr 1.00e-04 | train 1.0276 | valid 1.0334 | gn_avg   0.06 gn_max    0.08 |  675.6s
+
+[final-ts] train=1.0276  valid=1.0334  (680s)
+  [done] C_no-anneal_wd0.01_lr2e-3 in 680s  valid=1.0334

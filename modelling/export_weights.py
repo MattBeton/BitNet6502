@@ -22,7 +22,10 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "tests"))
 
-from modelling.bitnet_quant_inference import load_checkpoint, _get  # noqa: E402
+from modelling.bitnet_quant_inference import (  # noqa: E402
+    load_checkpoint, make_exp_lut, _get,
+    SOFTMAX_T, SOFTMAX_LUT_SIZE,
+)
 from c_harness import pack_ternary, pack_int4  # noqa: E402
 
 
@@ -161,6 +164,11 @@ def export(ckpt_path: Path, out_c: Path, out_h: Path) -> None:
         /* Head: int4 weight, no bias, learned shift; emits int16 logits. */
         extern struct {head_struct} head_W;
         extern const unsigned char head_shift;
+
+        /* Softmax-sampling LUT, baked at export time from `make_exp_lut(T)`.
+         * `lut[d] = round(255 * exp(-d / T))` for d in [0, EXP_LUT_SIZE). */
+        #define EXP_LUT_SIZE {SOFTMAX_LUT_SIZE}
+        extern const unsigned char exp_lut[EXP_LUT_SIZE];
 
         /* Scratch buffers shared across the inference path. Buffers that feed
          * into ternary_linear / int4_logits are over-allocated to N_EMBD_PADDED
@@ -303,6 +311,13 @@ def export(ckpt_path: Path, out_c: Path, out_h: Path) -> None:
         )
     parts.append(f"const unsigned char head_shift = {weights.head_shift};\n\n")
 
+    # Softmax LUT (16 bytes; T is hard-coded in bitnet_quant_inference.py).
+    lut_vals = make_exp_lut()
+    parts.append(
+        f"/* Softmax sampling LUT: lut[d] = round(255 * exp(-d / {SOFTMAX_T})) */\n"
+        f"const unsigned char exp_lut[EXP_LUT_SIZE] = {{ {', '.join(str(v) for v in lut_vals)} }};\n\n"
+    )
+
     # Scratch buffers (BSS). Single-token activations are stored as (C, 1)
     # column vectors so they can be passed straight into ternary_linear as `x`.
     # x_buf and y_gated feed into ternary_linear / int4_logits whose inner
@@ -335,7 +350,7 @@ def export(ckpt_path: Path, out_c: Path, out_h: Path) -> None:
 
 
 def main() -> None:
-    ckpt = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "build" / "bitnet_quant_final_v3.pt"
+    ckpt = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "build" / "bitnet_quant_tinystories_final.pt"
     out_c = REPO / "src" / "weights.c"
     out_h = REPO / "src" / "weights.h"
     export(ckpt, out_c, out_h)

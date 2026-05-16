@@ -1,0 +1,16 @@
+
+=== E1a: int4 head, n_embd=82 (23389 bytes / 23770 budget) ===
+device: mps
+vocab size: 27
+total parameters: 72,835  ternary: 65,436
+step     0 | lr 6.67e-06 | train 4.0142 | test 4.0032 |   3.9s
+step   600 | lr 1.97e-03 | train 2.1787 | test 2.1874 |  72.0s
+step  1200 | lr 1.74e-03 | train 1.9005 | test 1.8957 | 139.6s
+step  1800 | lr 1.33e-03 | train 1.9530 | test 1.9480 | 205.6s
+step  2400 | lr 8.50e-04 | train 1.8166 | test 1.8008 | 271.2s
+step  3000 | lr 4.22e-04 | train 2.1028 | test 2.0999 | 338.7s
+step  3600 | lr 1.54e-04 | train 1.8455 | test 1.8415 | 405.4s
+step  3999 | lr 1.00e-04 | train 1.8093 | test 1.8083 | 450.7s
+
+[E1a] final test_loss=1.8083  train=1.8093
+  [done] E1a in 452s

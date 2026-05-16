@@ -1,0 +1,157 @@
+
+######################################################################
+# E1a: e1a_int4_head.run({'num_steps': 4000})
+######################################################################
+
+=== E1a: int4 head, n_embd=82 (23389 bytes / 23770 budget) ===
+device: mps
+vocab size: 27
+total parameters: 72,835  ternary: 65,436
+step     0 | lr 6.67e-06 | train 4.0142 | test 4.0032 |   3.9s
+step   600 | lr 1.97e-03 | train 2.1787 | test 2.1874 |  72.0s
+step  1200 | lr 1.74e-03 | train 1.9005 | test 1.8957 | 139.6s
+step  1800 | lr 1.33e-03 | train 1.9530 | test 1.9480 | 205.6s
+step  2400 | lr 8.50e-04 | train 1.8166 | test 1.8008 | 271.2s
+step  3000 | lr 4.22e-04 | train 2.1028 | test 2.0999 | 338.7s
+step  3600 | lr 1.54e-04 | train 1.8455 | test 1.8415 | 405.4s
+step  3999 | lr 1.00e-04 | train 1.8093 | test 1.8083 | 450.7s
+
+[E1a] final test_loss=1.8083  train=1.8093
+  [done] E1a in 452s
+
+######################################################################
+# E5: e5_tied_embeddings.run({'num_steps': 4000})
+######################################################################
+
+E5a tied: n_embd=85, bytes=23671
+E5b untied (control, over budget): n_embd=85, bytes=24244
+
+=== E5a tied: n_embd=85 ===
+device: mps
+vocab size: 27
+total parameters: 75,499  ternary: 70,125
+step     0 | lr 6.67e-06 | train 4.0383 | test 4.0103 |   3.9s
+step   600 | lr 1.97e-03 | train 2.2087 | test 2.2252 |  73.3s
+step  1200 | lr 1.74e-03 | train 11.8885 | test 11.8983 | 141.0s
+step  1800 | lr 1.33e-03 | train 12.9261 | test 12.9795 | 208.8s
+step  2400 | lr 8.50e-04 | train 12.9547 | test 12.9917 | 276.3s
+step  3000 | lr 4.22e-04 | train 12.1193 | test 12.0805 | 344.2s
+step  3600 | lr 1.54e-04 | train 12.5809 | test 12.5167 | 412.6s
+step  3999 | lr 1.00e-04 | train 24.6682 | test 24.5377 | 458.8s
+
+[E5a tied] final test_loss=24.5377  train=24.6682
+
+=== E5b untied (over budget): n_embd=85 ===
+device: mps
+vocab size: 27
+total parameters: 77,794  ternary: 72,420
+step     0 | lr 6.67e-06 | train 4.8402 | test 4.8427 |   3.7s
+step   600 | lr 1.97e-03 | train 2.1069 | test 2.1164 |  72.7s
+step  1200 | lr 1.74e-03 | train 1.9003 | test 1.8933 | 141.8s
+step  1800 | lr 1.33e-03 | train 1.8443 | test 1.8466 | 211.1s
+step  2400 | lr 8.50e-04 | train 1.8096 | test 1.8100 | 280.9s
+step  3000 | lr 4.22e-04 | train 1.8420 | test 1.8346 | 349.7s
+step  3600 | lr 1.54e-04 | train 1.8471 | test 1.8411 | 420.9s
+step  3999 | lr 1.00e-04 | train 1.8096 | test 1.7966 | 468.3s
+
+[E5b untied (over budget)] final test_loss=1.7966  train=1.8096
+  [done] E5 in 927s
+
+######################################################################
+# E6: e6_anneal.run({'num_steps': 4000})
+######################################################################
+
+=== E6: anneal ternary, warmup=0.15, ramp_end=0.5, steps=4000 ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+  [E6] step 0: alpha=0.000
+step     0 | lr 6.67e-06 | train 4.2758 | test 4.3089 |   3.9s
+step   600 | lr 1.97e-03 | train 1.9281 | test 1.9223 |  73.4s
+step  1200 | lr 1.74e-03 | train 1.7317 | test 1.7102 | 142.8s
+step  1800 | lr 1.33e-03 | train 1.8016 | test 1.7850 | 212.7s
+  [E6] step 2000: alpha=1.000
+step  2400 | lr 8.50e-04 | train 1.8160 | test 1.8060 | 282.0s
+step  3000 | lr 4.22e-04 | train 1.7894 | test 1.7713 | 351.2s
+step  3600 | lr 1.54e-04 | train 1.8047 | test 1.7956 | 420.0s
+step  3999 | lr 1.00e-04 | train 1.7985 | test 1.7805 | 467.0s
+
+[E6] final test_loss=1.7805  train=1.7985
+  [done] E6 in 467s
+
+######################################################################
+# E1bc: e1bc_int4_more.run({'num_steps': 4000})
+######################################################################
+
+=== E1b: int4 head+C: n_embd=81 (23409 / 23770 bytes) ===
+device: mps
+vocab size: 27
+total parameters: 71,218  ternary: 66,096
+step     0 | lr 6.67e-06 | train 4.2342 | test 4.2791 |   3.9s
+step   600 | lr 1.97e-03 | train 2.0859 | test 2.0828 |  72.2s
+step  1200 | lr 1.74e-03 | train 1.8964 | test 1.8822 | 139.4s
+step  1800 | lr 1.33e-03 | train 1.8524 | test 1.8554 | 208.4s
+step  2400 | lr 8.50e-04 | train 1.8483 | test 1.8516 | 275.5s
+step  3000 | lr 4.22e-04 | train 1.8029 | test 1.7953 | 342.8s
+step  3600 | lr 1.54e-04 | train 1.7778 | test 1.7832 | 409.7s
+step  3999 | lr 1.00e-04 | train 1.7839 | test 1.7807 | 455.3s
+
+[E1b: int4 head+C] final test_loss=1.7807  train=1.7839
+
+=== E1c: int4 head+C+conv: n_embd=81 (23652 / 23770 bytes) ===
+device: mps
+vocab size: 27
+total parameters: 71,218  ternary: 66,096
+step     0 | lr 6.67e-06 | train 4.0769 | test 4.0426 |   3.6s
+step   600 | lr 1.97e-03 | train 1.9948 | test 2.0006 |  70.4s
+step  1200 | lr 1.74e-03 | train 1.8486 | test 1.8424 | 138.6s
+step  1800 | lr 1.33e-03 | train 1.8269 | test 1.8007 | 205.7s
+step  2400 | lr 8.50e-04 | train 2.0509 | test 2.0488 | 272.5s
+step  3000 | lr 4.22e-04 | train 1.7413 | test 1.7349 | 339.2s
+step  3600 | lr 1.54e-04 | train 2.0396 | test 2.0327 | 406.0s
+step  3999 | lr 1.00e-04 | train 1.7561 | test 1.7470 | 452.7s
+
+[E1c: int4 head+C+conv] final test_loss=1.7470  train=1.7561
+  [done] E1bc in 908s
+
+######################################################################
+# E3: e3_recalibrated_a1.run({'num_steps': 4000})
+######################################################################
+
+=== E3: recalibrated A1 (float weights, std-matched init), 4000 steps ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+step     0 | lr 6.67e-06 | train 4.9051 | test 4.8979 |   4.1s
+step   600 | lr 1.97e-03 | train 1.9753 | test 1.9762 |  73.9s
+step  1200 | lr 1.74e-03 | train 1.8347 | test 1.8287 | 143.2s
+step  1800 | lr 1.33e-03 | train 1.6796 | test 1.6674 | 211.3s
+step  2400 | lr 8.50e-04 | train 1.6441 | test 1.6276 | 279.6s
+step  3000 | lr 4.22e-04 | train 1.6567 | test 1.6445 | 349.5s
+step  3600 | lr 1.54e-04 | train 1.7349 | test 1.7095 | 418.5s
+step  3999 | lr 1.00e-04 | train 1.6396 | test 1.6268 | 465.1s
+
+[E3] final test_loss=1.6268  train=1.6396
+  [done] E3 in 465s
+
+######################################################################
+# E2: e2_int16_acts.run({'num_steps': 4000})
+######################################################################
+
+=== E2: int16 activations, 4000 steps ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+step     0 | lr 6.67e-06 | train 4.8415 | test 4.8585 |   3.7s
+step   600 | lr 1.97e-03 | train 2.1219 | test 2.0929 |  72.5s
+step  1200 | lr 1.74e-03 | train 1.9134 | test 1.8974 | 141.0s
+step  1800 | lr 1.33e-03 | train 1.8677 | test 1.8495 | 209.1s
+step  2400 | lr 8.50e-04 | train 1.8521 | test 1.8555 | 278.9s
+step  3000 | lr 4.22e-04 | train 1.8072 | test 1.8078 | 348.5s
+step  3600 | lr 1.54e-04 | train 1.7975 | test 1.8122 | 419.1s
+step  3999 | lr 1.00e-04 | train 1.7860 | test 1.7701 | 466.7s
+
+[E2] final test_loss=1.7701  train=1.7860
+  [done] E2 in 467s
+
+All experiments done. See results.csv and *_log.txt files.

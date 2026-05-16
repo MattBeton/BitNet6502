@@ -5,10 +5,10 @@
 #include "matrix.h"
 
 #define VOCAB_SIZE     27
-#define N_EMBD         81
-#define N_EMBD_PADDED  84      /* round up to a multiple of 4 */
-#define N_HIDDEN       162     /* in_proj output (gated) */
-#define N_HIDDEN_PADDED 164
+#define N_EMBD         56
+#define N_EMBD_PADDED  56      /* round up to a multiple of 4 */
+#define N_HIDDEN       112     /* in_proj output (gated) */
+#define N_HIDDEN_PADDED 112
 #define N_LAYER        3
 #define STATE_SIZE     8
 #define CONV_KERNEL    4
@@ -50,6 +50,11 @@ extern struct block_state   block_states[N_LAYER];
 /* Head: int4 weight, no bias, learned shift; emits int16 logits. */
 extern struct int4_matrix head_W;
 extern const unsigned char head_shift;
+
+/* Softmax-sampling LUT, baked at export time from `make_exp_lut(T)`.
+ * `lut[d] = round(255 * exp(-d / T))` for d in [0, EXP_LUT_SIZE). */
+#define EXP_LUT_SIZE 16
+extern const unsigned char exp_lut[EXP_LUT_SIZE];
 
 /* Scratch buffers shared across the inference path. Buffers that feed
  * into ternary_linear / int4_logits are over-allocated to N_EMBD_PADDED

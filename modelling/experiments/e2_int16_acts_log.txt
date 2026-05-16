@@ -1,0 +1,16 @@
+
+=== E2: int16 activations, 4000 steps ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+step     0 | lr 6.67e-06 | train 4.8415 | test 4.8585 |   3.7s
+step   600 | lr 1.97e-03 | train 2.1219 | test 2.0929 |  72.5s
+step  1200 | lr 1.74e-03 | train 1.9134 | test 1.8974 | 141.0s
+step  1800 | lr 1.33e-03 | train 1.8677 | test 1.8495 | 209.1s
+step  2400 | lr 8.50e-04 | train 1.8521 | test 1.8555 | 278.9s
+step  3000 | lr 4.22e-04 | train 1.8072 | test 1.8078 | 348.5s
+step  3600 | lr 1.54e-04 | train 1.7975 | test 1.8122 | 419.1s
+step  3999 | lr 1.00e-04 | train 1.7860 | test 1.7701 | 466.7s
+
+[E2] final test_loss=1.7701  train=1.7860
+  [done] E2 in 467s

@@ -1,0 +1,18 @@
+
+=== E6: anneal ternary, warmup=0.15, ramp_end=0.5, steps=4000 ===
+device: mps
+vocab size: 27
+total parameters: 76,123  ternary: 70,812
+  [E6] step 0: alpha=0.000
+step     0 | lr 6.67e-06 | train 4.2758 | test 4.3089 |   3.9s
+step   600 | lr 1.97e-03 | train 1.9281 | test 1.9223 |  73.4s
+step  1200 | lr 1.74e-03 | train 1.7317 | test 1.7102 | 142.8s
+step  1800 | lr 1.33e-03 | train 1.8016 | test 1.7850 | 212.7s
+  [E6] step 2000: alpha=1.000
+step  2400 | lr 8.50e-04 | train 1.8160 | test 1.8060 | 282.0s
+step  3000 | lr 4.22e-04 | train 1.7894 | test 1.7713 | 351.2s
+step  3600 | lr 1.54e-04 | train 1.8047 | test 1.7956 | 420.0s
+step  3999 | lr 1.00e-04 | train 1.7985 | test 1.7805 | 467.0s
+
+[E6] final test_loss=1.7805  train=1.7985
+  [done] E6 in 467s

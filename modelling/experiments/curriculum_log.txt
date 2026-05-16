@@ -1,0 +1,120 @@
+
+======================================================================
+  C1_control: phases=[(128, 8000)]  total_steps=8000
+  eval_block_size=128  eval_interval=200
+  freeze_shift_after_step=4000
+======================================================================
+params: 71,218  ternary: 66,096
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+
+[C1_control] phase 0: bs=128, steps 0..8000
+step      0 | bs 128 | lr 6.67e-06 | train_ema 4.1522 | valid 4.1460 |   14.9s
+step    200 | bs 128 | lr 1.34e-03 | train_ema 3.7209 | valid 3.6317 |  102.7s
+step    400 | bs 128 | lr 2.00e-03 | train_ema 2.0986 | valid 1.9932 |  189.8s
+step    600 | bs 128 | lr 1.99e-03 | train_ema 1.6049 | valid 1.5766 |  278.5s
+step    800 | bs 128 | lr 1.98e-03 | train_ema 1.4498 | valid 1.3933 |  350.3s
+step   1000 | bs 128 | lr 1.96e-03 | train_ema 1.2933 | valid 1.2397 |  434.9s
+step   1200 | bs 128 | lr 1.94e-03 | train_ema 1.2228 | valid 1.2017 |  511.4s
+step   1400 | bs 128 | lr 1.91e-03 | train_ema 1.2493 | valid 1.2128 |  582.4s
+step   1600 | bs 128 | lr 1.87e-03 | train_ema 1.2315 | valid 1.1826 |  661.2s
+step   1800 | bs 128 | lr 1.83e-03 | train_ema 1.2078 | valid 1.1709 |  735.2s
+step   2000 | bs 128 | lr 1.78e-03 | train_ema 1.1343 | valid 1.1122 |  818.3s
+step   2200 | bs 128 | lr 1.73e-03 | train_ema 1.0905 | valid 1.0706 |  892.3s
+step   2400 | bs 128 | lr 1.67e-03 | train_ema 1.1168 | valid 1.1031 | 1007.2s
+step   2600 | bs 128 | lr 1.61e-03 | train_ema 1.1075 | valid 1.0937 | 1094.1s
+step   2800 | bs 128 | lr 1.55e-03 | train_ema 1.0757 | valid 1.0755 | 1176.2s
+step   3000 | bs 128 | lr 1.48e-03 | train_ema 1.0410 | valid 1.0429 | 1293.0s
+step   3200 | bs 128 | lr 1.41e-03 | train_ema 1.0857 | valid 1.0691 | 1368.2s
+step   3400 | bs 128 | lr 1.34e-03 | train_ema 1.0608 | valid 1.0861 | 1447.8s
+step   3600 | bs 128 | lr 1.26e-03 | train_ema 1.0368 | valid 1.0047 | 1524.2s
+step   3800 | bs 128 | lr 1.19e-03 | train_ema 1.0374 | valid 1.0181 | 1608.1s
+  [C1_control] step 4000: froze 19 shift params
+step   4000 | bs 128 | lr 1.11e-03 | train_ema 1.0857 | valid 1.0657 | 1693.9s
+step   4200 | bs 128 | lr 1.03e-03 | train_ema 0.9987 | valid 0.9856 | 1759.6s
+step   4400 | bs 128 | lr 9.53e-04 | train_ema 0.9907 | valid 0.9716 | 1821.2s
+step   4600 | bs 128 | lr 8.77e-04 | train_ema 0.9891 | valid 0.9723 | 1874.7s
+step   4800 | bs 128 | lr 8.01e-04 | train_ema 0.9812 | valid 0.9716 | 1934.4s
+step   5000 | bs 128 | lr 7.27e-04 | train_ema 0.9781 | valid 0.9516 | 2028.8s
+step   5200 | bs 128 | lr 6.55e-04 | train_ema 0.9712 | valid 0.9476 | 2100.2s
+step   5400 | bs 128 | lr 5.86e-04 | train_ema 0.9725 | valid 0.9547 | 2153.7s
+step   5600 | bs 128 | lr 5.20e-04 | train_ema 0.9688 | valid 0.9429 | 2213.5s
+step   5800 | bs 128 | lr 4.58e-04 | train_ema 0.9621 | valid 0.9357 | 2272.7s
+step   6000 | bs 128 | lr 3.99e-04 | train_ema 0.9630 | valid 0.9381 | 2336.4s
+step   6200 | bs 128 | lr 3.45e-04 | train_ema 0.9640 | valid 0.9384 | 2411.9s
+step   6400 | bs 128 | lr 2.95e-04 | train_ema 0.9593 | valid 0.9321 | 2476.1s
+step   6600 | bs 128 | lr 2.51e-04 | train_ema 0.9550 | valid 0.9203 | 2542.3s
+step   6800 | bs 128 | lr 2.12e-04 | train_ema 0.9529 | valid 0.9272 | 2614.6s
+step   7000 | bs 128 | lr 1.78e-04 | train_ema 0.9560 | valid 0.9311 | 2676.7s
+step   7200 | bs 128 | lr 1.50e-04 | train_ema 0.9564 | valid 0.9292 | 2738.4s
+step   7400 | bs 128 | lr 1.28e-04 | train_ema 0.9590 | valid 0.9312 | 2800.6s
+step   7600 | bs 128 | lr 1.13e-04 | train_ema 0.9572 | valid 0.9473 | 2854.4s
+step   7800 | bs 128 | lr 1.03e-04 | train_ema 0.9567 | valid 0.9360 | 2915.8s
+step   7999 | bs 128 | lr 1.00e-04 | train_ema 0.9540 | valid 0.9229 | 2987.5s
+
+[C1_control] DONE  final valid=0.9229  (2987s)
+  saved → build/bitnet_quant_C1_control.pt
+
+======================================================================
+  C2_curriculum: phases=[(32, 4000), (128, 4000)]  total_steps=8000
+  eval_block_size=128  eval_interval=200
+  freeze_shift_after_step=4000
+======================================================================
+params: 71,218  ternary: 66,096
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+
+[C2_curriculum] phase 0: bs=32, steps 0..4000
+step      0 | bs  32 | lr 6.67e-06 | train_ema 4.1611 | valid 4.1460 |   15.6s
+step    200 | bs  32 | lr 1.34e-03 | train_ema 3.7320 | valid 3.6368 |   31.9s
+step    400 | bs  32 | lr 2.00e-03 | train_ema 2.0377 | valid 1.9283 |   48.1s
+step    600 | bs  32 | lr 1.99e-03 | train_ema 1.5666 | valid 1.4763 |   64.1s
+step    800 | bs  32 | lr 1.98e-03 | train_ema 1.4631 | valid 1.3652 |   80.2s
+step   1000 | bs  32 | lr 1.96e-03 | train_ema 1.4103 | valid 1.3113 |   96.2s
+step   1200 | bs  32 | lr 1.94e-03 | train_ema 1.2834 | valid 1.1895 |  112.2s
+step   1400 | bs  32 | lr 1.91e-03 | train_ema 1.3226 | valid 1.1524 |  128.7s
+step   1600 | bs  32 | lr 1.87e-03 | train_ema 1.2358 | valid 1.1546 |  145.2s
+step   1800 | bs  32 | lr 1.83e-03 | train_ema 1.2492 | valid 1.1827 |  161.2s
+step   2000 | bs  32 | lr 1.78e-03 | train_ema 1.2142 | valid 1.1382 |  177.2s
+step   2200 | bs  32 | lr 1.73e-03 | train_ema 1.1765 | valid 1.0951 |  193.2s
+step   2400 | bs  32 | lr 1.67e-03 | train_ema 1.1324 | valid 1.0452 |  210.8s
+step   2600 | bs  32 | lr 1.61e-03 | train_ema 1.1365 | valid 1.0428 |  227.1s
+step   2800 | bs  32 | lr 1.55e-03 | train_ema 1.1402 | valid 1.0218 |  243.1s
+step   3000 | bs  32 | lr 1.48e-03 | train_ema 1.2044 | valid 1.1547 |  259.1s
+step   3200 | bs  32 | lr 1.41e-03 | train_ema 1.1790 | valid 1.1048 |  275.1s
+step   3400 | bs  32 | lr 1.34e-03 | train_ema 1.1839 | valid 1.0496 |  291.1s
+step   3600 | bs  32 | lr 1.26e-03 | train_ema 1.1753 | valid 1.0682 |  307.3s
+step   3800 | bs  32 | lr 1.19e-03 | train_ema 1.1465 | valid 1.0034 |  323.4s
+cache hit:  TinyStories-train-oneline__tinystories_vocab_top500.tokens.npy
+cache hit:  TinyStories-valid-oneline__tinystories_vocab_top500.tokens.npy
+
+[C2_curriculum] phase 1: bs=128, steps 4000..8000
+  [C2_curriculum] step 4000: froze 19 shift params
+step   4000 | bs 128 | lr 1.11e-03 | train_ema 1.1092 | valid 1.0246 |  365.9s
+step   4200 | bs 128 | lr 1.03e-03 | train_ema 0.9948 | valid 0.9748 |  429.8s
+step   4400 | bs 128 | lr 9.53e-04 | train_ema 0.9949 | valid 0.9714 |  495.1s
+step   4600 | bs 128 | lr 8.77e-04 | train_ema 0.9818 | valid 0.9719 |  559.2s
+step   4800 | bs 128 | lr 8.01e-04 | train_ema 0.9852 | valid 0.9497 |  690.7s
+step   5000 | bs 128 | lr 7.27e-04 | train_ema 0.9785 | valid 0.9630 |  777.5s
+step   5200 | bs 128 | lr 6.55e-04 | train_ema 0.9774 | valid 0.9500 |  863.7s
+step   5400 | bs 128 | lr 5.86e-04 | train_ema 0.9729 | valid 0.9491 |  928.3s
+step   5600 | bs 128 | lr 5.20e-04 | train_ema 0.9650 | valid 0.9607 |  991.5s
+step   5800 | bs 128 | lr 4.58e-04 | train_ema 0.9697 | valid 0.9420 | 1073.7s
+step   6000 | bs 128 | lr 3.99e-04 | train_ema 0.9611 | valid 0.9356 | 1161.2s
+step   6200 | bs 128 | lr 3.45e-04 | train_ema 0.9641 | valid 0.9422 | 1223.7s
+step   6400 | bs 128 | lr 2.95e-04 | train_ema 0.9587 | valid 0.9336 | 1277.8s
+step   6600 | bs 128 | lr 2.51e-04 | train_ema 0.9570 | valid 0.9330 | 1379.7s
+step   6800 | bs 128 | lr 2.12e-04 | train_ema 0.9574 | valid 0.9372 | 1441.6s
+step   7000 | bs 128 | lr 1.78e-04 | train_ema 0.9544 | valid 0.9391 | 1501.0s
+step   7200 | bs 128 | lr 1.50e-04 | train_ema 0.9510 | valid 0.9301 | 1554.2s
+step   7400 | bs 128 | lr 1.28e-04 | train_ema 0.9512 | valid 0.9347 | 1619.8s
+step   7600 | bs 128 | lr 1.13e-04 | train_ema 0.9557 | valid 0.9236 | 1681.9s
+step   7800 | bs 128 | lr 1.03e-04 | train_ema 0.9490 | valid 0.9300 | 1743.3s
+step   7999 | bs 128 | lr 1.00e-04 | train_ema 0.9505 | valid 0.9116 | 1795.3s
+
+[C2_curriculum] DONE  final valid=0.9116  (1795s)
+  saved → build/bitnet_quant_C2_curriculum.pt

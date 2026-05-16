@@ -299,6 +299,13 @@ class LCG8:
         self.state = (self.state * 75 + 74) & 0xFF
         return self.state
 
+    def next_u16(self) -> int:
+        """Two LCG bytes combined as `(hi << 8) | lo`. Low byte advances first,
+        high byte second — both implementations must follow this order."""
+        lo = self.next_u8()
+        hi = self.next_u8()
+        return (hi << 8) | lo
+
 
 def top_k_sample(logits: torch.Tensor, k: int, rng: LCG8) -> int:
     """Pick one of the top-k logit indices. Mutates `logits` (mask with INT_MIN
@@ -312,6 +319,88 @@ def top_k_sample(logits: torch.Tensor, k: int, rng: LCG8) -> int:
         top_idx.append(idx)
         logits[idx] = -32768
     return top_idx[rng.next_u8() % k]
+
+
+# -----------------------------------------------------------------------------
+# Softmax sampling via a 16-byte exp LUT
+# -----------------------------------------------------------------------------
+# We approximate `exp(-d / T)` with a tiny lookup table indexed by the int16
+# logit gap from the maximum. After head_shift the typical top-k spread is
+# only a few units (median 2, p95 9, max ~11 over 500 generation steps), so 16
+# entries cover the whole working range; anything past index 15 clips to the
+# floor entry which is 0 anyway. The LUT is generated once at export time and
+# baked into ROM (16 bytes), so neither the inference engine nor training need
+# to evaluate `exp` — and Python and C produce byte-identical samples.
+
+SOFTMAX_T = 0.9            # sampling temperature; matches the value used in the findings
+SOFTMAX_LUT_SIZE = 16
+SOFTMAX_LUT_PEAK = 255     # value at delta=0; integer alphabet [0, 255]
+
+
+def make_exp_lut(temperature: float = SOFTMAX_T,
+                 size: int = SOFTMAX_LUT_SIZE,
+                 peak: int = SOFTMAX_LUT_PEAK) -> list[int]:
+    """Generate the LUT as a list of `size` ints in [0, peak], where
+    `lut[d] = round(peak * exp(-d / temperature))`. Used by both the Python
+    sampler and `export_weights.py` so the C side gets identical bytes."""
+    import math
+    return [max(0, min(peak, round(peak * math.exp(-d / temperature))))
+            for d in range(size)]
+
+
+def softmax_sample(logits: torch.Tensor, k: int, rng: LCG8,
+                   lut: list[int] | None = None) -> int:
+    """Probability-weighted sample from the top-k logits using `lut` as a
+    softmax approximation. Mutates `logits` (mask with INT_MIN after each pick)
+    so the C implementation can mirror this byte-for-byte.
+
+    Algorithm:
+        1. Repeated argmax to find top-k indices and their logit values.
+        2. delta_i = max_logit - logit_i, clipped to [0, len(lut) - 1].
+        3. w_i = lut[delta_i].
+        4. r in [0, sum(w_i)) via 16-bit LCG draw + while-subtract modulo.
+        5. Cumulative sum walk to pick the index.
+    """
+    if lut is None:
+        lut = make_exp_lut()
+    if k > 16:
+        k = 16
+    lut_max_idx = len(lut) - 1
+    logits = logits.clone()
+
+    top_idx: list[int] = []
+    top_logit: list[int] = []
+    for _ in range(k):
+        idx = int(logits.argmax().item())
+        top_idx.append(idx)
+        top_logit.append(int(logits[idx].item()))
+        logits[idx] = -32768
+
+    max_logit = top_logit[0]
+    weights = []
+    for lv in top_logit:
+        d = max_logit - lv
+        if d < 0:
+            d = 0
+        if d > lut_max_idx:
+            d = lut_max_idx
+        weights.append(lut[d])
+
+    total = sum(weights)
+    if total == 0:
+        # Pathological — every weight rounded to 0. Fall back to greedy.
+        return top_idx[0]
+
+    r = rng.next_u16()
+    while r >= total:
+        r -= total          # u16 modulo via subtraction; same loop on the 6502
+
+    cumulative = 0
+    for i in range(k):
+        cumulative += weights[i]
+        if r < cumulative:
+            return top_idx[i]
+    return top_idx[k - 1]   # numerical safety; should never hit
 
 
 @torch.no_grad()
@@ -357,6 +446,36 @@ def generate_topk(
         pos += 1
     for _ in range(max_new_tokens):
         next_id = top_k_sample(logits, k, rng)
+        out.append(next_id)
+        logits = lm_step(next_id, pos, weights, states)
+        pos += 1
+    return out
+
+
+@torch.no_grad()
+def generate_softmax(
+    weights: ModelWeights,
+    prompt_ids: list[int],
+    max_new_tokens: int,
+    k: int = 8,
+    rng_seed: int = 1,
+    lut: list[int] | None = None,
+) -> list[int]:
+    """Streaming generation with softmax sampling over the top-k logits.
+    Probability weights come from a 16-byte exp LUT (see `make_exp_lut`).
+    Byte-exact reproducible against the C engine for the same `rng_seed`."""
+    rng = LCG8(rng_seed)
+    if lut is None:
+        lut = make_exp_lut()
+    states = make_model_state(weights)
+    out = list(prompt_ids)
+    pos = 0
+    logits = None
+    for tid in prompt_ids:
+        logits = lm_step(tid, pos, weights, states)
+        pos += 1
+    for _ in range(max_new_tokens):
+        next_id = softmax_sample(logits, k, rng, lut)
         out.append(next_id)
         logits = lm_step(next_id, pos, weights, states)
         pos += 1

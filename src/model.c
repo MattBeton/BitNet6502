@@ -1,5 +1,3 @@
-#include <stdio.h>
-
 #include "matrix.h"
 #include "weights.h"
 #include "model.h"

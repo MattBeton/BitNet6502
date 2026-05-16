@@ -7,8 +7,10 @@ LD65 = ld65
 TARGET = sim6502
 LIB = $(TARGET).lib
 
-# Source files
-C_SRC = src/matrix.c src/weights.c src/F.c src/model.c src/program.c
+# Source files. io.c routes write_char() to stdio; for BBC we substitute io_bbc.s.
+# matrix_extras.c contains harness-only functions (matrix_multiply, ssm_step,
+# depthwise_conv1d_step, etc.) — omitted from BBC build to save ~3 KB.
+C_SRC = src/matrix.c src/matrix_extras.c src/weights.c src/F.c src/model.c src/program.c src/io.c
 ASM_SRC = src/text.s
 
 # Intermediate assembly files
@@ -39,6 +41,9 @@ all: $(OUTPUT)
 build/%.s: src/%.c
 	$(CC65) $(CFLAGS) -o $@ $<
 
+build/%.s: tools/%.c
+	$(CC65) $(CFLAGS) -o $@ $<
+
 # Rule to assemble generated assembly files to object files
 build/%.o: build/%.s
 	$(CA65) $(AFLAGS) -o $@ $<
@@ -60,12 +65,34 @@ apple2:
 	rm -f build/*.o build/*.s
 	$(MAKE) TARGET=apple2 all
 
+# Build for BBC Micro. cc65 has no `bbc` target/lib, but `bbc.cfg` ships
+# with cc65 — combined with the `none` target it produces a flat binary
+# loaded at &0E00 (cassette filing system origin). We swap io.c for
+# io_bbc.s so output goes through OSWRCH ($FFEE).
+#
+# Uses recursive make to reuse the general pattern rules with TARGET=none,
+# overriding C_SRC/ASM_SRC/LDFLAGS/OUTPUT. We also shrink __STACKSIZE__ to
+# 256 bytes (default 2 KB) — our recursion is shallow and we need every
+# byte of the 27 KB MAIN region.
+BBC_CFG = tools/bbc.cfg
+bbc:
+	rm -f build/*.o build/*.s
+	$(MAKE) TARGET=none \
+	        C_SRC="src/matrix.c src/weights.c src/F.c src/model.c src/program.c" \
+	        ASM_SRC="src/text.s src/io_bbc.s" \
+	        LDFLAGS="-C $(BBC_CFG) -D __STACKSIZE__=0x0200 -m build/program.bbc.map" \
+	        LIB=none.lib \
+	        OUTPUT=build/program.bbc \
+	        all
+	@echo "wrote build/program.bbc ($$(wc -c < build/program.bbc) bytes); load address &1900"
+
 # Clean up build artifacts
 clean:
 	rm -f build/*.s
 	rm -f build/*.o
 	rm -f build/program.*
 	rm -f build/test_harness.*
+	rm -rf build/bbc
 
 # Python virtual environment
 VENV = .venv
@@ -110,4 +137,26 @@ $(VENV): tests/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -r tests/requirements.txt
 
-.PHONY: all clean run apple2 test test-compare harness
+.PHONY: all clean run apple2 bbc bbc-wav bbc-hello bbc-hello-wav test test-compare harness
+
+# Minimal BBC sanity build: hello-world that just prints via OSWRCH. Use this
+# to verify the end-to-end pipeline (cc65 -> binary -> tape WAV -> beeb) before
+# running the full model build.
+bbc-hello:
+	rm -f build/*.o build/*.s
+	$(MAKE) TARGET=none \
+	        C_SRC="src/bbc_hello.c" \
+	        ASM_SRC="src/io_bbc.s" \
+	        LDFLAGS="-C $(BBC_CFG) -D __STACKSIZE__=0x0100 -m build/hello.bbc.map" \
+	        LIB=none.lib \
+	        OUTPUT=build/hello.bbc \
+	        all
+	@echo "wrote build/hello.bbc ($$(wc -c < build/hello.bbc) bytes); load address &0E00"
+
+bbc-hello-wav: bbc-hello
+	$(PYTHON) tools/make_bbc_tape.py build/hello.bbc --load 0x0E00 --exec 0x0E00 --name HELLO --out build/hello.wav
+
+# Build a BBC Micro tape WAV from the BBC binary. Plays into the cassette port.
+bbc-wav: build/program.bbc
+	$(PYTHON) tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.wav
+	@echo "wrote build/bitnet.wav"
