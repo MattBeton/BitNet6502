@@ -14,6 +14,9 @@ build/bbc/
 build/*.uef
 build/*.wav
 build/*.pt
+# Exception: the deployable TinyStories checkpoint (~295 KB) is checked in
+# so downstream builds are reproducible without re-training.
+!build/bitnet_quant_tinystories_final.pt
 build/*.sim6502
 build/*.apple2
 build/*.bbc
