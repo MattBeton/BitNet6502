@@ -162,11 +162,11 @@ class BlockWeights:
     in_proj_weight: torch.Tensor    # int8 ternary (2C, C)
     in_proj_bias: torch.Tensor      # int16 (2C,)
     in_proj_shift: int
-    conv_weight: torch.Tensor       # int8 ternary or int4 (C, K)
+    conv_weight: torch.Tensor       # int8 int4 (C, K)
     conv_shift: int
     decay: torch.Tensor             # int8 (C, S), [0, 127]
     B: torch.Tensor                 # int8 ternary (C, S)
-    C_mat: torch.Tensor             # int8 ternary or int4 (C, S)
+    C_mat: torch.Tensor             # int8 int4 (C, S)
     D: torch.Tensor                 # int8 (C,)
     ssm_out_shift: int
     d_shift: int
@@ -174,7 +174,6 @@ class BlockWeights:
     out_proj_weight: torch.Tensor   # int8 ternary (C, C)
     out_proj_bias: torch.Tensor     # int16 (C,)
     out_proj_shift: int
-    use_gate: bool
 
 
 @dataclass
@@ -196,15 +195,11 @@ def block_step(
     state: BlockState,
 ) -> torch.Tensor:                  # int8 (C,) — output residual stream
     """One timestep through one SSM block. Mutates state in place."""
-    # 1) Input projection (and split into u, gate if gated)
+    # 1) Input projection: split into (u, gate)
     proj = ternary_linear(x, w.in_proj_weight, w.in_proj_bias, w.in_proj_shift)  # (2C,) int8
-    if w.use_gate:
-        c_dim = x.shape[0]
-        u = proj[:c_dim]                                                          # (C,) int8
-        gate = proj[c_dim:]                                                       # (C,) int8
-    else:
-        u = proj
-        gate = None
+    c_dim = x.shape[0]
+    u = proj[:c_dim]                                                              # (C,) int8
+    gate = proj[c_dim:]                                                           # (C,) int8
 
     # 2) Depthwise conv (push u into the ring buffer, emit one output)
     state.conv_buffer = torch.cat([state.conv_buffer[1:], u.unsqueeze(0)], dim=0)  # int8 (K, C)
@@ -215,9 +210,8 @@ def block_step(
                  w.ssm_out_shift, w.d_shift)                                       # (C,) int8
 
     # 4) Gating (element-wise int8 * int8 → int16, then >>shift, then sat int8)
-    if gate is not None:
-        y_acc = y.to(torch.int16) * gate.to(torch.int16)                           # (C,) int16
-        y = shift_sat_int8(y_acc, w.gate_shift)                                    # (C,) int8
+    y_acc = y.to(torch.int16) * gate.to(torch.int16)                               # (C,) int16
+    y = shift_sat_int8(y_acc, w.gate_shift)                                        # (C,) int8
 
     # 5) Output projection
     y = ternary_linear(y, w.out_proj_weight, w.out_proj_bias, w.out_proj_shift)   # (C,) int8
@@ -237,8 +231,6 @@ class ModelConfig:
     n_layer: int
     state_size: int
     conv_kernel: int
-    use_gate: bool
-    use_pos_embed: bool
     vocab_size: int
 
 
@@ -246,16 +238,9 @@ class ModelConfig:
 class ModelWeights:
     cfg: ModelConfig
     token_embedding: torch.Tensor       # int8 (vocab, C)
-    pos_embedding: torch.Tensor | None  # int8 (block_size, C) or None
     blocks: list[BlockWeights]
-    head_weight: torch.Tensor           # int8 ternary or int4 (vocab, C)
+    head_weight: torch.Tensor           # int8 int4 (vocab, C)
     head_shift: int                     # argmax-invariant; kept for fidelity to training
-    # Per-tensor quantization flags. When False the tensor is ternary {-1,0,+1},
-    # when True it is int4 [-7..+7]. The numeric kernels are identical for both;
-    # the flags only matter for the on-device packed-byte layout (2-bit vs 4-bit).
-    int4_head: bool = False
-    int4_ssm_C: bool = False
-    int4_conv: bool = False
 
 
 def make_model_state(weights: ModelWeights) -> list[BlockState]:
@@ -270,17 +255,14 @@ def lm_step(
     weights: ModelWeights,
     states: list[BlockState],
 ) -> torch.Tensor:                       # int16 (vocab,) — logits
-    """One token in, logits out. Mutates block states."""
-    # Embed
+    """One token in, logits out. Mutates block states. `pos` is unused (kept
+    as a positional arg for API compatibility — no positional embeddings)."""
     x = weights.token_embedding[token_id].clone()                                  # (C,) int8
-    if weights.pos_embedding is not None and pos < weights.cfg.block_size:
-        x = sat_int8(x.to(torch.int16) + weights.pos_embedding[pos].to(torch.int16))
 
-    # Stack of SSM blocks
     for w, s in zip(weights.blocks, states):
         x = block_step(x, w, s)                                                    # (C,) int8
 
-    # Head: int8 · {ternary or int4} weight → int16 logits with learned shift.
+    # Head: int8 · int4 weight → int16 logits with learned shift.
     # No saturation: argmax needs the full int16 dynamic range.
     return int4_logits(x, weights.head_weight, weights.head_shift)
 
@@ -490,52 +472,29 @@ def _round_clip(t: torch.Tensor, dtype: torch.dtype, lo: int, hi: int) -> torch.
     return torch.clamp(torch.round(t), lo, hi).to(dtype)
 
 
-def _get(obj, key: str):
-    """Access either dict[key] or obj.key — checkpoints differ in how cfg/vocab are stored."""
-    return obj[key] if isinstance(obj, dict) else getattr(obj, key)
 
 
 def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
-    # Newer checkpoints pickle a `Config` from the top-level `bitnet_quant` module
-    # and the experiment-stack subclasses (`StackedBitNetLM`, `Int4SSMLayer`, …)
-    # from `modelling/experiments/`. Make both importable regardless of how this
-    # function is called (pytest from repo root, sim65 driver, exporter, …).
-    here = Path(__file__).resolve().parent
-    for p in (here, here / "experiments"):
-        s = str(p)
-        if s not in sys.path:
-            sys.path.insert(0, s)
+    """Load a training checkpoint and return (ModelWeights, vocab).
 
+    Expects the dict-only checkpoint format produced by `modelling.train`:
+        {state_dict, model_cfg, train_cfg, vocab: {stoi, itos}, ...}
+    """
     ck = torch.load(path, map_location="cpu", weights_only=False)
     sd = ck["state_dict"]
-    cfg_t = ck["cfg"]
+    cfg_d = ck["model_cfg"]
     vocab = ck["vocab"]
-    vocab_size = len(_get(vocab, "itos"))
-
-    # Older checkpoints have no "stack" key — they're plain ternary everywhere.
-    stack = ck.get("stack", {}) or {}
-    int4_head    = bool(stack.get("int4_head", False))
-    int4_ssm_C   = bool(stack.get("int4_ssm_C", False))
-    int4_conv    = bool(stack.get("int4_conv", False))
-    # Each int4 tensor uses the [-7, +7] alphabet (E1a/E1c convention).
-    head_lo, head_hi = (-7, 7) if int4_head else (-1, 1)
-    C_lo, C_hi       = (-7, 7) if int4_ssm_C else (-1, 1)
-    conv_lo, conv_hi = (-7, 7) if int4_conv  else (-1, 1)
 
     cfg = ModelConfig(
-        block_size=_get(cfg_t, "block_size"),
-        n_embd=_get(cfg_t, "n_embd"),
-        n_layer=_get(cfg_t, "n_layer"),
-        state_size=_get(cfg_t, "state_size"),
-        conv_kernel=_get(cfg_t, "conv_kernel"),
-        use_gate=_get(cfg_t, "use_gate"),
-        use_pos_embed=_get(cfg_t, "use_pos_embed"),
-        vocab_size=vocab_size,
+        block_size=cfg_d["block_size"],
+        n_embd=cfg_d["n_embd"],
+        n_layer=cfg_d["n_layer"],
+        state_size=cfg_d["state_size"],
+        conv_kernel=cfg_d["conv_kernel"],
+        vocab_size=cfg_d["vocab_size"],
     )
 
     token_embedding = _round_clip(sd["token_embedding"], torch.int8, -128, 127)
-    pos_embedding = (_round_clip(sd["position_embedding"], torch.int8, -128, 127)
-                     if cfg.use_pos_embed else None)
 
     blocks: list[BlockWeights] = []
     for i in range(cfg.n_layer):
@@ -544,35 +503,29 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
             in_proj_weight  = _round_clip(sd[p + "in_proj.weight"], torch.int8, -1, 1),
             in_proj_bias    = _round_clip(sd[p + "in_proj.bias"], torch.int16, -32768, 32767),
             in_proj_shift   = int(round(sd[p + "in_proj.shift"].item())),
-            conv_weight     = _round_clip(sd[p + "conv_weight"], torch.int8, conv_lo, conv_hi),
+            conv_weight     = _round_clip(sd[p + "conv_weight"], torch.int8, -7, 7),
             conv_shift      = int(round(sd[p + "conv_shift"].item())),
             decay           = _round_clip(sd[p + "decay"], torch.int8, 0, 127),
             B               = _round_clip(sd[p + "B"], torch.int8, -1, 1),
-            C_mat           = _round_clip(sd[p + "C"], torch.int8, C_lo, C_hi),
+            C_mat           = _round_clip(sd[p + "C"], torch.int8, -7, 7),
             D               = _round_clip(sd[p + "D"], torch.int8, -128, 127),
             ssm_out_shift   = int(round(sd[p + "ssm_out_shift"].item())),
             d_shift         = int(round(sd[p + "d_shift"].item())),
-            gate_shift      = (int(round(sd[p + "gate_shift"].item()))
-                               if cfg.use_gate else 0),
+            gate_shift      = int(round(sd[p + "gate_shift"].item())),
             out_proj_weight = _round_clip(sd[p + "out_proj.weight"], torch.int8, -1, 1),
             out_proj_bias   = _round_clip(sd[p + "out_proj.bias"], torch.int16, -32768, 32767),
             out_proj_shift  = int(round(sd[p + "out_proj.shift"].item())),
-            use_gate        = cfg.use_gate,
         ))
 
-    head_weight = _round_clip(sd["head.weight"], torch.int8, head_lo, head_hi)
+    head_weight = _round_clip(sd["head.weight"], torch.int8, -7, 7)
     head_shift = int(round(sd["head.shift"].item()))
 
     return ModelWeights(
         cfg=cfg,
         token_embedding=token_embedding,
-        pos_embedding=pos_embedding,
         blocks=blocks,
         head_weight=head_weight,
         head_shift=head_shift,
-        int4_head=int4_head,
-        int4_ssm_C=int4_ssm_C,
-        int4_conv=int4_conv,
     ), vocab
 
 
@@ -581,24 +534,21 @@ def load_checkpoint(path: str | Path) -> tuple[ModelWeights, dict]:
 # =============================================================================
 
 def main() -> None:
-    ckpt_path = Path(__file__).parent.parent / "build" / "bitnet_quant_final_v3.pt"
+    ckpt_path = Path(__file__).parent.parent / "build" / "bitnet_quant_n56_full.pt"
     weights, vocab = load_checkpoint(ckpt_path)
 
     cfg = weights.cfg
     print(f"loaded: vocab={cfg.vocab_size}  n_embd={cfg.n_embd}  n_layer={cfg.n_layer}  "
-          f"state_size={cfg.state_size}  K={cfg.conv_kernel}  "
-          f"gate={cfg.use_gate}  pos_embed={cfg.use_pos_embed}", flush=True)
+          f"state_size={cfg.state_size}  K={cfg.conv_kernel}", flush=True)
 
-    stoi = _get(vocab, "stoi")
-    itos = _get(vocab, "itos")
+    stoi = vocab["stoi"]
+    itos = vocab["itos"]
 
-    prompt = " "
+    prompt = "once upon a time "
     prompt_ids = [stoi[c] for c in prompt if c in stoi]
-    if not prompt_ids:
-        prompt_ids = [0]
 
-    print(f"prompt: {prompt!r} (ids={prompt_ids})", flush=True)
-    out_ids = generate_greedy(weights, prompt_ids, max_new_tokens=300)
+    print(f"prompt: {prompt!r}", flush=True)
+    out_ids = generate_softmax(weights, prompt_ids, max_new_tokens=200, k=8, rng_seed=1)
     print("".join(itos[i] for i in out_ids))
 
 

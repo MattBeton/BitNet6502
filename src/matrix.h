@@ -52,6 +52,16 @@ void ternary_linear(struct ternary_matrix *W,
                     unsigned char          shift,
                     struct char_matrix    *out);
 
+/* Hand-written 6502 implementation of ternary_linear. Byte-identical to the
+ * C version (verified by test_equivalence.py), ~5× faster on the inner loop.
+ * Implemented in src/ternary_linear_asm.s. Only handles seq=1 (single
+ * timestep), which is the only shape the inference path uses. */
+void ternary_linear_asm(struct ternary_matrix *W,
+                        struct char_matrix    *x,
+                        struct int_matrix     *bias,
+                        unsigned char          shift,
+                        struct char_matrix    *out);
+
 /* Head linear: int8 input · int4 weight → int16 logits, no bias, no saturation.
  *   out[i] = (signed int)((W @ x)[i] >> shift)
  * The accumulator is signed long because n_embd × 127 × 7 (≈72k) can exceed

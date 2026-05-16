@@ -103,8 +103,9 @@ PYTHON = $(VENV)/bin/python
 # over stdin/stdout. Lets pytest A/B-test C against the Python reference.
 # ----------------------------------------------------------------------------
 
-HARNESS_LIB_C = src/matrix.c src/F.c
-HARNESS_LIB_OBJ = $(HARNESS_LIB_C:src/%.c=build/%.o)
+HARNESS_LIB_C = src/matrix.c src/matrix_extras.c src/F.c
+HARNESS_LIB_S = src/ternary_linear_asm.s
+HARNESS_LIB_OBJ = $(HARNESS_LIB_C:src/%.c=build/%.o) $(HARNESS_LIB_S:src/%.s=build/%.o)
 HARNESS_OUTPUT = build/test_harness.$(TARGET)
 
 # Compile harness.c with -I../../src so it can find matrix.h
@@ -137,7 +138,35 @@ $(VENV): tests/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -r tests/requirements.txt
 
-.PHONY: all clean run apple2 bbc bbc-wav bbc-hello bbc-hello-wav test test-compare harness
+.PHONY: all clean run apple2 bbc bbc-wav bbc-hello bbc-hello-wav test test-compare harness bench-c bench-asm bench
+
+# ---- ternary_linear cycle benchmark ----
+# Builds two sim6502 binaries — one calling the C ternary_linear, one calling
+# the hand-written asm version — and runs each under `sim65 -c` so the cycle
+# count is printed. The benchmark wraps 100 calls on the in_proj shape
+# (84x168) which is the dominant matmul per token.
+
+build/bench_c.sim6502: src/bench_ternary.c src/matrix.c src/F.c src/ternary_linear_asm.s
+	$(CC65) -t sim6502 -o build/bench_c.s $<
+	$(CA65) -t sim6502 -o build/bench_c.o build/bench_c.s
+	$(LD65) -t sim6502 -o $@ build/bench_c.o build/matrix.o build/F.o build/ternary_linear_asm.o sim6502.lib
+
+build/bench_asm.sim6502: src/bench_ternary.c src/matrix.c src/F.c src/ternary_linear_asm.s
+	$(CC65) -t sim6502 -DBENCH_ASM -o build/bench_asm.s $<
+	$(CA65) -t sim6502 -o build/bench_asm.o build/bench_asm.s
+	$(LD65) -t sim6502 -o $@ build/bench_asm.o build/matrix.o build/F.o build/ternary_linear_asm.o sim6502.lib
+
+bench-c: build/bench_c.sim6502
+	sim65 -c $< > /dev/null
+
+bench-asm: build/bench_asm.sim6502
+	sim65 -c $< > /dev/null
+
+bench: build/bench_c.sim6502 build/bench_asm.sim6502
+	@echo
+	@echo "=== ternary_linear cycle benchmark (100 calls, 84x168 in_proj shape) ==="
+	@printf "C    : " ; sim65 -c build/bench_c.sim6502   2>&1 | grep cycles
+	@printf "asm  : " ; sim65 -c build/bench_asm.sim6502 2>&1 | grep cycles
 
 # Minimal BBC sanity build: hello-world that just prints via OSWRCH. Use this
 # to verify the end-to-end pipeline (cc65 -> binary -> tape WAV -> beeb) before

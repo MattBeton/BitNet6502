@@ -77,6 +77,7 @@ class CHarness:
     OP_INT4_DW_CONV1D  = 0x09
     OP_SSM_STEP_INT4_C = 0x0A
     OP_SOFTMAX_SAMPLE  = 0x0B
+    OP_TERNARY_LINEAR_ASM = 0x0C
     OP_QUIT            = 0xFF
 
     def __init__(self, binary: Path | str | None = None) -> None:
@@ -224,6 +225,8 @@ class CHarness:
         W: np.ndarray,        # int8 (out_f, in_f), values in {-1, 0, +1}
         bias: np.ndarray,     # int16 (out_f,)
         shift: int,
+        *,
+        asm: bool = False,    # use the hand-written asm implementation
     ) -> np.ndarray:           # int8 (out_f, seq)
         in_f = W.shape[1]
         out_f = W.shape[0]
@@ -236,8 +239,11 @@ class CHarness:
             raise ValueError(f"bias shape {bias.shape} != ({out_f},)")
         if x.dtype != np.int8 or W.dtype != np.int8 or bias.dtype != np.int16:
             raise ValueError("dtype mismatch")
+        if asm and seq != 1:
+            raise ValueError("asm version only handles seq=1")
 
-        msg = bytes([self.OP_TERNARY_LINEAR, in_f, out_f, seq, shift])
+        op = self.OP_TERNARY_LINEAR_ASM if asm else self.OP_TERNARY_LINEAR
+        msg = bytes([op, in_f, out_f, seq, shift])
         msg += pack_ternary(W)
         msg += x.tobytes(order="C")
         msg += bias.astype("<i2").tobytes()

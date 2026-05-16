@@ -26,6 +26,7 @@
 #define OP_INT4_DW_CONV1D   0x09
 #define OP_SSM_STEP_INT4_C  0x0A
 #define OP_SOFTMAX_SAMPLE   0x0B
+#define OP_TERNARY_LINEAR_ASM 0x0C
 #define OP_QUIT             0xFF
 
 /* Maximum sizes seen by any test. n_embd=84, in_proj doubles to 168. */
@@ -264,6 +265,32 @@ static void op_ternary_linear(void) {
     for (idx = 0; idx < n_out_bytes; idx++) write_u8((unsigned char)out_buf[idx]);
 }
 
+/* Same wire as op_ternary_linear, but invokes the hand-written asm version.
+ * Used by test_ternary_linear_asm to assert byte-identical output vs. C. */
+static void op_ternary_linear_asm(void) {
+    unsigned char in_f  = read_u8();
+    unsigned char out_f = read_u8();
+    unsigned char seq   = read_u8();
+    unsigned char shift = read_u8();
+    unsigned int n_w_bytes = ((unsigned int)out_f * ((in_f + 3) >> 2));
+    unsigned int n_x_bytes = (unsigned int)in_f * seq;
+    unsigned int n_out_bytes = (unsigned int)out_f * seq;
+    unsigned int idx;
+
+    for (idx = 0; idx < n_w_bytes; idx++) W_buf[idx] = read_u8();
+    for (idx = 0; idx < n_x_bytes; idx++) x_buf[idx] = (signed char)read_u8();
+    for (idx = 0; idx < out_f; idx++)     bias_buf[idx] = read_i16();
+
+    W_m.data = W_buf;       W_m.height    = out_f; W_m.width    = in_f;
+    x_m.data = x_buf;       x_m.height    = in_f;  x_m.width    = seq;
+    bias_m.data = bias_buf; bias_m.height = out_f; bias_m.width = 1;
+    out_m.data = out_buf;   out_m.height  = out_f; out_m.width  = seq;
+
+    ternary_linear_asm(&W_m, &x_m, &bias_m, shift, &out_m);
+
+    for (idx = 0; idx < n_out_bytes; idx++) write_u8((unsigned char)out_buf[idx]);
+}
+
 /* ---- int4 ops ---- */
 
 /* Wire: [in_f u8][out_f u8][seq u8][shift u8]
@@ -401,6 +428,9 @@ int main(void) {
                 break;
             case OP_TERNARY_LINEAR:
                 op_ternary_linear();
+                break;
+            case OP_TERNARY_LINEAR_ASM:
+                op_ternary_linear_asm();
                 break;
             case OP_VEC_MUL_SHIFT:
                 op_vec_mul_shift();

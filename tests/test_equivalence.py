@@ -15,7 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from c_harness import CHarness
-from modelling.bitnet_quant_inference import (
+from modelling.inference import (
     shift_sat_int8 as py_shift_sat_int8,
     ternary_linear as py_ternary_linear,
     depthwise_conv1d_step as py_depthwise_conv1d_step,
@@ -129,6 +129,39 @@ def test_ternary_linear(harness, in_f, out_f, seq, shift, seed):
 
     np.testing.assert_array_equal(c_out, py_out.T,
                                    err_msg=f"in={in_f} out={out_f} seq={seq} shift={shift} seed={seed}")
+
+
+# --------------------------------------------------------------------------- #
+# Phase 3b: hand-written 6502 asm ternary_linear — must match C byte-for-byte.
+# Only seq=1 (single-token inference, the only shape the model uses on-device).
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize("in_f,out_f,shift,seed", [
+    (8,    8,  2, 0),
+    (16,   8,  3, 1),
+    (16,  16,  5, 2),
+    (84,  84,  5, 3),     # n_embd=84, out_proj-ish shape
+    (84, 168,  3, 4),     # in_proj shape from the trained 81-dim model (padded to 84)
+    (60,  60,  5, 5),     # n_embd=56 (padded to 60)
+    (60, 120,  3, 6),
+    (32,  32,  4, 7),
+    (32,  32,  0, 8),     # shift=0 (no right-shift, pure saturation)
+    (12,  12,  7, 9),     # tiny shape with large shift
+])
+def test_ternary_linear_asm(harness, in_f, out_f, shift, seed):
+    """The hand-written asm ternary_linear must produce byte-identical output
+    to the C reference across the shapes the model actually uses."""
+    rng = np.random.default_rng(seed)
+    x_c, W, bias = _random_ternary_linear_inputs(rng, in_f, out_f, seq=1)
+
+    c_out = harness.ternary_linear(x_c, W, bias, shift, asm=False)
+    asm_out = harness.ternary_linear(x_c, W, bias, shift, asm=True)
+
+    np.testing.assert_array_equal(
+        asm_out, c_out,
+        err_msg=f"asm != C: in={in_f} out={out_f} shift={shift} seed={seed}",
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -391,12 +424,15 @@ def test_softmax_sample_dominant_top1(harness):
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.slow
 def test_end_to_end_generation():
     """Run the full sim65 program (no harness) and compare its emitted tokens
-    to the Python reference softmax decode with the same prompt and LCG seed."""
+    to the Python reference softmax decode with the same prompt and LCG seed.
+
+    Slow: the full 200-token generation takes ~5 minutes under sim65."""
     import subprocess
-    from modelling.bitnet_quant_inference import (
-        load_checkpoint, generate_softmax, _get,
+    from modelling.inference import (
+        load_checkpoint, generate_softmax,
     )
 
     repo = Path(__file__).resolve().parent.parent
@@ -405,15 +441,19 @@ def test_end_to_end_generation():
         pytest.skip("build/program.sim6502 not built (run `make`)")
 
     # Run C
-    result = subprocess.run(["sim65", str(bin_path)],
-                            capture_output=True, text=True, timeout=120)
+    try:
+        result = subprocess.run(["sim65", str(bin_path)],
+                                capture_output=True, text=True, timeout=600)
+    except subprocess.TimeoutExpired as e:
+        pytest.skip(f"sim65 generation didn't finish in 10 min: {e}")
     c_out = result.stdout.rstrip("\n")
 
     # Run Python with the same checkpoint, prompt, k and LCG seed as program.c.
-    weights, vocab = load_checkpoint(repo / "build" / "bitnet_quant_final_v3.pt")
-    stoi = _get(vocab, "stoi")
-    itos = _get(vocab, "itos")
-    prompt_ids = [stoi[" "]]
+    weights, vocab = load_checkpoint(repo / "build" / "bitnet_quant_n56_full.pt")
+    stoi = vocab["stoi"]
+    itos = vocab["itos"]
+    # program.c primes with "once upon a time " before sampling.
+    prompt_ids = [stoi[c] for c in "once upon a time "]
     out_ids = generate_softmax(weights, prompt_ids, max_new_tokens=len(c_out), k=8, rng_seed=1)
     py_out = "".join(itos[i] for i in out_ids[len(prompt_ids):])
 

@@ -20,7 +20,7 @@ extern const char itos[VOCAB_SIZE];
 /* Token embedding table. */
 extern struct char_matrix token_embedding;
 
-/* Per-block weights and per-block mutable state. Indexed 0..2. */
+/* Per-block weights and per-block mutable state. Indexed 0..N_LAYER-1. */
 struct block_weights {
     struct ternary_matrix *in_proj_W;
     struct int_matrix     *in_proj_bias;
