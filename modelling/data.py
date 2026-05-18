@@ -76,23 +76,61 @@ _KEEP_RE = re.compile(r"[^a-z ]")
 _WS_RE = re.compile(r"\s+")
 _TERMINATOR_RE = re.compile(r"[.!?]+")
 
-# Names appearing in the top-500 TinyStories vocab. When the `dedup_names`
-# flag is on, every occurrence of one of these is rewritten to the canonical
-# name *before* the vocab-filter check — so stories using rare names like
-# "billy" no longer get dropped, and the model only ever sees one character
-# name. Used by post-training/fine-tune runs to free model capacity that
-# would otherwise be spent disambiguating multiple names.
-DEDUP_NAMES: frozenset[str] = frozenset({
-    "lily", "tom", "ben", "timmy", "tim", "sam", "anna", "max", "jack",
-    "mia", "lucy", "john", "bob", "sue", "sarah", "jane", "joe", "daisy",
-    "teddy", "benny", "billy",
+# Character names appearing in the top-500 TinyStories vocab. When the
+# `dedup_names` flag is on, every occurrence of one of these is rewritten to
+# a small set of canonical names *before* the vocab-filter check — so stories
+# using rare names like "billy" no longer get dropped, and the model only
+# ever sees a handful of character names.
+#
+# Two canonical names — one female ("lily"), one male ("tom") — preserve
+# pronoun cues ("she said", "he ran") and avoid the "lily and lily are
+# friends" artifact we saw with a single canonical name.
+FEMALE_NAMES: frozenset[str] = frozenset({
+    "lily", "anna", "mia", "lucy", "sarah", "sara", "jane", "daisy", "sue",
 })
-DEDUP_NAME_CANONICAL = "lily"
+MALE_NAMES: frozenset[str] = frozenset({
+    "tom", "ben", "timmy", "tim", "sam", "max", "jack", "john", "bob",
+    "joe", "teddy", "benny", "billy",
+})
+FEMALE_CANONICAL = "lily"
+MALE_CANONICAL = "tom"
+# Union; kept for code that wants to know "is this token a known name?"
+DEDUP_NAMES: frozenset[str] = FEMALE_NAMES | MALE_NAMES
 
 
 def _apply_name_dedup(text: str) -> str:
-    """Replace any whole-word match of a name in DEDUP_NAMES with the canonical name."""
-    return " ".join(DEDUP_NAME_CANONICAL if w in DEDUP_NAMES else w for w in text.split())
+    """Replace each whole-word match of a known name with its gendered canonical."""
+    out: list[str] = []
+    for w in text.split():
+        if w in FEMALE_NAMES:
+            out.append(FEMALE_CANONICAL)
+        elif w in MALE_NAMES:
+            out.append(MALE_CANONICAL)
+        else:
+            out.append(w)
+    return " ".join(out)
+
+
+# Boilerplate TinyStories template that creates massive repetition in the
+# training stream: nearly every story starts with "once upon a time" and ends
+# with "the end". With many stories concatenated into 64-char training windows,
+# the model overfits to these phrases. Strip them sentence-by-sentence.
+_BOILERPLATE_PREFIX_RE = re.compile(r"^(once upon a time|one day)\s+")
+_BOILERPLATE_SUFFIX_RE = re.compile(r"\s+the end$")
+
+
+def _strip_boilerplate(sentence: str) -> str:
+    """Remove TinyStories template wrappers from a normalised sentence.
+
+    Stripped patterns (all leave the sentence body intact):
+        leading  'once upon a time '   |   leading 'one day '
+        trailing ' the end'             |   whole-sentence 'the end' → empty
+    """
+    if sentence == "the end":
+        return ""
+    sentence = _BOILERPLATE_PREFIX_RE.sub("", sentence)
+    sentence = _BOILERPLATE_SUFFIX_RE.sub("", sentence)
+    return sentence
 
 
 # ----------------------------------------------------------------------------- #
@@ -160,7 +198,7 @@ def _file_signature(path: Path) -> dict:
 
 
 def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str],
-               *, dedup_names: bool = False) -> dict:
+               *, dedup_names: bool = False, strip_boilerplate: bool = False) -> dict:
     digest = hashlib.sha256("\n".join(vocab_words).encode("utf-8")).hexdigest()
     return {
         "source": _file_signature(source_path),
@@ -170,9 +208,11 @@ def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str],
         "normalize_version": NORMALIZE_VERSION,
         "alphabet": CHAR_ALPHABET,
         "dedup_names": dedup_names,
+        # Versioned digest of the dedup spec; v2 = gendered (female→lily, male→tom)
         "dedup_names_sha256": hashlib.sha256(
-            "\n".join(sorted(DEDUP_NAMES)).encode("utf-8")
+            ("v2|" + "|".join(sorted(FEMALE_NAMES)) + "||" + "|".join(sorted(MALE_NAMES))).encode("utf-8")
         ).hexdigest() if dedup_names else None,
+        "strip_boilerplate": strip_boilerplate,
     }
 
 
@@ -182,14 +222,18 @@ def filter_and_tokenize_stream(
     progress_every: int = 500_000,
     *,
     dedup_names: bool = False,
+    strip_boilerplate: bool = False,
 ) -> np.ndarray:
     """Stream `source_path`, keep sentences whose words are all in `vocab_words`,
     join them with single spaces, and return an int8 array of char-token ids.
 
-    If `dedup_names=True`, all known character names (DEDUP_NAMES) are mapped
-    to a single canonical name (DEDUP_NAME_CANONICAL) before the vocab-filter
-    check. This frees model capacity from disambiguating multiple names and
-    admits stories that would otherwise be dropped for using less-common ones."""
+    `dedup_names=True`: rewrite known character names to a small set of
+    canonical names (female→'lily', male→'tom') so the model doesn't waste
+    capacity disambiguating many characters.
+
+    `strip_boilerplate=True`: drop TinyStories templating ('once upon a time',
+    'one day', 'the end') sentence-by-sentence. These template phrases otherwise
+    dominate the training distribution and the model overfits to emitting them."""
     word_set = set(vocab_words)
     stoi = CHAR_VOCAB.stoi
     pieces: list[str] = []
@@ -206,6 +250,10 @@ def filter_and_tokenize_stream(
                     continue
                 if dedup_names:
                     text = _apply_name_dedup(text)
+                if strip_boilerplate:
+                    text = _strip_boilerplate(text)
+                    if not text:
+                        continue
                 n_total += 1
                 if all(w in word_set for w in text.split()):
                     pieces.append(text)
@@ -243,24 +291,30 @@ def filtered_tokens_with_cache(
     *,
     rebuild: bool = False,
     dedup_names: bool = False,
+    strip_boilerplate: bool = False,
 ) -> np.ndarray:
     """Load filtered+tokenised stream from cache, or build it and cache.
 
-    Cache invalidates automatically when the source file, the vocab file,
-    `NORMALIZE_VERSION`, or `dedup_names` changes.
+    Cache invalidates automatically when the source file, vocab file,
+    `NORMALIZE_VERSION`, dedup spec, or boilerplate-strip flag changes.
     """
     source_path = Path(source_path)
     vocab_path = Path(vocab_path)
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    suffix = "__dedup" if dedup_names else ""
+    suffix = ""
+    if dedup_names:
+        suffix += "__dedup"
+    if strip_boilerplate:
+        suffix += "__stripped"
     stem = f"{source_path.stem}__{vocab_path.stem}{suffix}"
     tokens_path = cache_dir / f"{stem}.tokens.npy"
     meta_path = cache_dir / f"{stem}.meta.json"
 
     vocab_words = load_word_vocab(vocab_path)
-    key = _cache_key(source_path, vocab_path, vocab_words, dedup_names=dedup_names)
+    key = _cache_key(source_path, vocab_path, vocab_words,
+                     dedup_names=dedup_names, strip_boilerplate=strip_boilerplate)
 
     if not rebuild and tokens_path.exists() and meta_path.exists():
         try:
@@ -273,7 +327,9 @@ def filtered_tokens_with_cache(
         print(f"cache stale: {tokens_path.name} (rebuilding)")
 
     print(f"building cache: {tokens_path.name}")
-    tokens = filter_and_tokenize_stream(source_path, vocab_words, dedup_names=dedup_names)
+    tokens = filter_and_tokenize_stream(source_path, vocab_words,
+                                        dedup_names=dedup_names,
+                                        strip_boilerplate=strip_boilerplate)
     np.save(tokens_path, tokens)
     meta_path.write_text(json.dumps(key, indent=2), encoding="utf-8")
     print(
@@ -297,13 +353,16 @@ def build_datasets(
     cache_dir: str | Path = DEFAULT_CACHE_DIR,
     rebuild_cache: bool = False,
     dedup_names: bool = False,
+    strip_boilerplate: bool = False,
 ) -> tuple[Dataset, Dataset, Vocabulary]:
     """Build (train, valid, vocab) datasets ready to feed into a DataLoader."""
     train_tokens = filtered_tokens_with_cache(
-        train_path, vocab_path, cache_dir, rebuild=rebuild_cache, dedup_names=dedup_names,
+        train_path, vocab_path, cache_dir, rebuild=rebuild_cache,
+        dedup_names=dedup_names, strip_boilerplate=strip_boilerplate,
     )
     valid_tokens = filtered_tokens_with_cache(
-        valid_path, vocab_path, cache_dir, rebuild=rebuild_cache, dedup_names=dedup_names,
+        valid_path, vocab_path, cache_dir, rebuild=rebuild_cache,
+        dedup_names=dedup_names, strip_boilerplate=strip_boilerplate,
     )
     train_ds = TokenStreamDataset(train_tokens, block_size=block_size)
     valid_ds = TokenStreamDataset(valid_tokens, block_size=block_size)

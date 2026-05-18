@@ -74,6 +74,31 @@ def lr_for_step(step: int, train_cfg: TrainConfig) -> float:
     return train_cfg.min_learning_rate + cosine * (train_cfg.learning_rate - train_cfg.min_learning_rate)
 
 
+def _load_legacy_friendly(path: str | Path, *, map_location) -> dict:
+    """Load a checkpoint, registering shim modules so old pickles still work.
+
+    Older checkpoints (bitnet_quant_n56_full.pt, bitnet_quant_tinystories_final.pt)
+    were saved when `Config` / `Vocabulary` lived in modules that have since been
+    refactored away. We register lightweight placeholder classes under the old
+    module names so the unpickler can rehydrate the non-tensor metadata
+    fields; the state_dict (just tensors) is what we actually need to use.
+    """
+    import sys as _sys
+    import types as _types
+
+    class _Compat:
+        def __setstate__(self, state): self.__dict__.update(state)
+        def __init__(self, *args, **kwargs): pass
+
+    for _mod in ("bitnet_quant", "shakespeare", "modelling.shakespeare"):
+        if _mod not in _sys.modules:
+            _m = _types.ModuleType(_mod)
+            _m.Config = type("Config", (_Compat,), {})
+            _m.Vocabulary = type("Vocabulary", (_Compat,), {})
+            _sys.modules[_mod] = _m
+    return torch.load(str(path), map_location=map_location, weights_only=False)
+
+
 @torch.no_grad()
 def eval_loss(model: BitNetLM, loader: DataLoader, n_batches: int, device: torch.device) -> float:
     model.eval()
@@ -99,6 +124,7 @@ def train(
     verbose: bool = True,
     vocab_path: str | Path | None = None,
     dedup_names: bool = False,
+    strip_boilerplate: bool = False,
     init_from: str | Path | None = None,
 ) -> tuple[BitNetLM, Vocabulary, dict[str, float]]:
     """Train a BitNetLM on TinyStories and (optionally) save the checkpoint.
@@ -106,13 +132,15 @@ def train(
     Returns (model, vocab, final_losses). final_losses has keys
     {'train', 'valid', 'gn_max', 'gn_avg'}.
 
-    `vocab_path` overrides the default top-500 word filter; `dedup_names` collapses
-    known character names to a single canonical name before tokenising;
+    `vocab_path` overrides the default top-500 word filter; `dedup_names`
+    rewrites known character names to gendered canonicals (female→'lily',
+    male→'tom'); `strip_boilerplate` removes 'once upon a time'/'the end'
+    templating that would otherwise dominate the training distribution;
     `init_from` loads a previous checkpoint into the model (fine-tune mode).
     """
     device = resolve_device(device_override)
 
-    ds_kwargs: dict = {"dedup_names": dedup_names}
+    ds_kwargs: dict = {"dedup_names": dedup_names, "strip_boilerplate": strip_boilerplate}
     if vocab_path is not None:
         ds_kwargs["vocab_path"] = vocab_path
     train_ds, valid_ds, vocab = build_datasets(block_size=model_cfg.block_size, **ds_kwargs)
@@ -138,8 +166,8 @@ def train(
     if init_from is not None:
         if verbose:
             print(f"loading pretrained weights from {init_from}", flush=True)
-        ckpt = torch.load(str(init_from), map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["state_dict"])
+        _ckpt = _load_legacy_friendly(init_from, map_location=device)
+        model.load_state_dict(_ckpt["state_dict"])
     total = sum(p.numel() for p in model.parameters())
     if verbose:
         print(
@@ -280,7 +308,11 @@ def main() -> None:
     p.add_argument("--vocab-path", type=str, default=None,
                    help="Filter-vocab file (default: tinystories_vocab_top500.txt).")
     p.add_argument("--dedup-names", action="store_true",
-                   help="Map known character names to single canonical 'lily' before tokenising.")
+                   help="Rewrite known character names to gendered canonicals "
+                        "(female→'lily', male→'tom') before tokenising.")
+    p.add_argument("--strip-boilerplate", action="store_true",
+                   help="Drop TinyStories templating ('once upon a time', "
+                        "'one day', 'the end') from each sentence.")
     p.add_argument("--init-from", type=str, default=None,
                    help="Pretrained checkpoint to load model weights from (fine-tune mode).")
     args = p.parse_args()
@@ -304,6 +336,8 @@ def main() -> None:
         print(f"  vocab_path={args.vocab_path}")
     if args.dedup_names:
         print(f"  dedup_names=True")
+    if args.strip_boilerplate:
+        print(f"  strip_boilerplate=True")
     if args.init_from:
         print(f"  init_from={args.init_from}")
     print(f"{'='*70}")
@@ -311,6 +345,7 @@ def main() -> None:
     t0 = time.time()
     _, _, losses = train(model_cfg, train_cfg, save_path=args.save, device_override=args.device,
                          vocab_path=args.vocab_path, dedup_names=args.dedup_names,
+                         strip_boilerplate=args.strip_boilerplate,
                          init_from=args.init_from)
     elapsed = time.time() - t0
     print(f"\ndone: train={losses['train']:.4f}  valid={losses['valid']:.4f}  ({elapsed:.0f}s)")
