@@ -115,7 +115,20 @@ def _apply_name_dedup(text: str) -> str:
 # training stream: nearly every story starts with "once upon a time" and ends
 # with "the end". With many stories concatenated into 64-char training windows,
 # the model overfits to these phrases. Strip them sentence-by-sentence.
-_BOILERPLATE_PREFIX_RE = re.compile(r"^(once upon a time|one day)\s+")
+#
+# Also strips the character-introduction template that dominates the dedup'd
+# corpus ("there was a little girl named lily" — ~17k occurrences in just 5 MB
+# of training data). Without this, the model finetunes to spam the intro
+# template every few tokens. Names elsewhere in the story stay, so the model
+# still learns who the characters are.
+_BOILERPLATE_PREFIX_RE = re.compile(
+    r"^("
+    r"once upon a time|"
+    r"one day|"
+    r"there (?:was|were) (?:a |an |some )?(?:little |small |big |young )?"
+    r"(?:girl|boy|child|kid|man|woman)(?: named (?:lily|tom))?"
+    r")\s+"
+)
 _BOILERPLATE_SUFFIX_RE = re.compile(r"\s+the end$")
 
 
@@ -123,12 +136,20 @@ def _strip_boilerplate(sentence: str) -> str:
     """Remove TinyStories template wrappers from a normalised sentence.
 
     Stripped patterns (all leave the sentence body intact):
-        leading  'once upon a time '   |   leading 'one day '
-        trailing ' the end'             |   whole-sentence 'the end' → empty
+        leading  'once upon a time '
+        leading  'one day '
+        leading  'there was a (little)? (girl|boy|...) (named lily|tom)?'
+        trailing ' the end'
+        whole-sentence 'the end' → empty
     """
     if sentence == "the end":
         return ""
-    sentence = _BOILERPLATE_PREFIX_RE.sub("", sentence)
+    # Strip multiple stacked prefixes ("once upon a time there was a girl named lily ...").
+    while True:
+        new = _BOILERPLATE_PREFIX_RE.sub("", sentence)
+        if new == sentence:
+            break
+        sentence = new
     sentence = _BOILERPLATE_SUFFIX_RE.sub("", sentence)
     return sentence
 
@@ -212,7 +233,9 @@ def _cache_key(source_path: Path, vocab_path: Path, vocab_words: Sequence[str],
         "dedup_names_sha256": hashlib.sha256(
             ("v2|" + "|".join(sorted(FEMALE_NAMES)) + "||" + "|".join(sorted(MALE_NAMES))).encode("utf-8")
         ).hexdigest() if dedup_names else None,
+        # Versioned: v2 adds 'there was a (girl|boy) named (lily|tom)' to the strip set.
         "strip_boilerplate": strip_boilerplate,
+        "strip_boilerplate_version": 2 if strip_boilerplate else 0,
     }
 
 

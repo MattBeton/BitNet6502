@@ -27,6 +27,7 @@ build/*.pt
 !build/bitnet_quant_n56_v100_dedup_finetune.pt
 !build/bitnet_quant_n56_v200_dedup_finetune.pt
 !build/bitnet_quant_n56_v200_dedup_stripped_finetune.pt
+!build/bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt
 build/*.sim6502
 build/*.apple2
 build/*.bbc
