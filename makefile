@@ -138,7 +138,7 @@ $(VENV): tests/requirements.txt
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install -r tests/requirements.txt
 
-.PHONY: all clean run apple2 bbc bbc-wav bbc-hello bbc-hello-wav test test-compare harness bench-c bench-asm bench
+.PHONY: all clean run apple2 bbc bbc-wav bbc-uef bbc-hello bbc-hello-wav test test-compare harness bench-c bench-asm bench
 
 # ---- ternary_linear cycle benchmark ----
 # Builds two sim6502 binaries — one calling the C ternary_linear, one calling
@@ -189,3 +189,10 @@ bbc-hello-wav: bbc-hello
 bbc-wav: build/program.bbc
 	$(PYTHON) tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.wav
 	@echo "wrote build/bitnet.wav"
+
+# Build a BBC Micro tape UEF from the BBC binary. Drop into PlayUEF
+# (playuef.8bitkick.cc/?LOCAL=true) to convert to audio in-browser, or
+# load directly into an emulator (JSBeeb, BeebEm, b-em).
+bbc-uef: build/program.bbc
+	$(PYTHON) tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.uef
+	@echo "wrote build/bitnet.uef"
