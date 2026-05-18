@@ -5,6 +5,11 @@
 
 #define N_GENERATE 200
 #define TOP_K       8
+/* RNG seed picked by sweeping LCG states with the v200_dedup_stripped_v2
+ * checkpoint: seed 200 produces varied multi-character narrative ("tom they
+ * decided the park ... hugged his dad ... bird ... dog named tom ... bear")
+ * instead of collapsing to repeated phrases. */
+#define RNG_SEED  200
 
 /* Vocab stoi: ' ' -> 0, 'a'..'z' -> 1..26. */
 static unsigned char stoi(char c) {
@@ -16,6 +21,8 @@ int main(void) {
     unsigned char tok;
     unsigned char i;
     unsigned int  step;
+
+    rng_seed(RNG_SEED);
 
     /* Prefill: feed each prompt token through the model, echoing as we go. */
     for (i = 0; prompt[i] != '\0'; i++) {
