@@ -325,9 +325,14 @@ def export(ckpt_path: Path, out_c: Path, out_h: Path) -> None:
 
 
 def main() -> None:
-    ckpt = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / "build" / "bitnet_quant_n56_full.pt"
+    # Default to the current best deployable checkpoint (v200 fine-tune with
+    # both gendered name dedup AND boilerplate stripping). Override by passing
+    # a checkpoint path as the first positional arg.
+    default_ckpt = REPO / "build" / "bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt"
+    ckpt = Path(sys.argv[1]) if len(sys.argv) > 1 else default_ckpt
     out_c = REPO / "src" / "weights.c"
     out_h = REPO / "src" / "weights.h"
+    print(f"exporting from: {ckpt}")
     export(ckpt, out_c, out_h)
     print(f"wrote {out_c} ({out_c.stat().st_size:,} bytes)")
     print(f"wrote {out_h}")
