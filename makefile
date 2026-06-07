@@ -130,21 +130,22 @@ test-compare: $(OUTPUT) $(VENV)
 	@echo "Comparing outputs..."
 	@diff /tmp/bitnet_c_output.txt /tmp/bitnet_py_output.txt && echo "PASS: C and Python outputs match!" || echo "FAIL: Outputs differ"
 
-# Create virtual environment and install dependencies
-$(VENV): tests/requirements.txt
+# Create virtual environment and install dependencies (numpy, torch, pytest)
+$(VENV): pyproject.toml
 	python3 -m venv $(VENV)
-	$(VENV)/bin/pip install -r tests/requirements.txt
+	$(VENV)/bin/pip install -e ".[dev]"
 
 .PHONY: all clean run apple2 bbc bbc-wav bbc-uef test test-compare harness
 
 # Build a BBC Micro tape WAV from the BBC binary. Plays into the cassette port.
+# Uses system python3 — make_bbc_tape.py is stdlib-only, no venv needed.
 bbc-wav: build/program.bbc
-	$(PYTHON) tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.wav
+	python3 tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.wav
 	@echo "wrote build/bitnet.wav"
 
 # Build a BBC Micro tape UEF from the BBC binary. Drop into PlayUEF
 # (playuef.8bitkick.cc/?LOCAL=true) to convert to audio in-browser, or
 # load directly into an emulator (JSBeeb, BeebEm, b-em).
 bbc-uef: build/program.bbc
-	$(PYTHON) tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.uef
+	python3 tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.uef
 	@echo "wrote build/bitnet.uef"

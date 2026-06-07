@@ -28,6 +28,29 @@ BitNet6502/
 └── makefile
 ```
 
+## Setup
+
+Three install paths depending on what you want to do:
+
+```bash
+# A. Run the BBC binary in sim65 — no Python at all.
+brew install cc65        # macOS; or your distro's cc65 package
+make run                 # builds + runs build/program.sim6502
+
+# B. Run the Python reference / parity tests.
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"        # numpy, torch, pytest, plus jupyter/datasets/matplotlib for poking around
+make test                                # builds harness + runs pytest
+
+# C. Train your own model.
+# Path B, then download TinyStories (one-time) — see the docstring in
+# dataset/prepare_tinystories.py for the curl commands.
+python -m dataset.prepare_tinystories
+python -m model.train
+```
+
+The default makefile bootstrap (`make test`) creates `.venv/` from `pyproject.toml` on first run.
+
 ## Train
 
 Download TinyStories first (one-time setup — see the docstring in `dataset/prepare_tinystories.py`), then:
