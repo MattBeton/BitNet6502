@@ -2,8 +2,8 @@
 
 Run from the repo root:
 
-    python -m modelling.train --n-embd 56 --steps 30000 \\
-                              --save build/bitnet_quant_n56_full.pt
+    python -m model.train --n-embd 56 --steps 30000 \\
+                          --save build/bitnet_quant_n56_full.pt
 
 Default config matches the BBC-deployed `bitnet_quant_n56_full.pt`
 (valid loss 1.03 after 30,000 steps).
@@ -19,8 +19,8 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from modelling.data import build_datasets, Vocabulary
-from modelling.model import BitNetLM, ModelConfig, freeze_shift_params
+from dataset.data import build_datasets, Vocabulary
+from model.model import BitNetLM, ModelConfig, freeze_shift_params
 
 
 # ----------------------------------------------------------------------------- #
@@ -90,7 +90,8 @@ def _load_legacy_friendly(path: str | Path, *, map_location) -> dict:
         def __setstate__(self, state): self.__dict__.update(state)
         def __init__(self, *args, **kwargs): pass
 
-    for _mod in ("bitnet_quant", "shakespeare", "modelling.shakespeare"):
+    for _mod in ("bitnet_quant", "shakespeare", "modelling.shakespeare",
+                 "modelling.data", "modelling.model"):
         if _mod not in _sys.modules:
             _m = _types.ModuleType(_mod)
             _m.Config = type("Config", (_Compat,), {})

@@ -14,19 +14,9 @@ build/bbc/
 build/*.uef
 build/*.wav
 build/*.pt
-# Exception: the deployable TinyStories checkpoints are checked in so downstream
-# builds are reproducible without re-training.
-#   _tinystories_final.pt           — n_embd=81 reference SoTA model (valid 0.90, too big for BBC)
-#   _n56_full.pt                    — n_embd=56 BBC-deployable model (valid 1.03, used by build/bitnet.uef)
-#   _n56_v100_dedup_finetune.pt          — n=56 fine-tuned on top-100 + single-name dedup (valid 0.32; very repetitive)
-#   _n56_v200_dedup_finetune.pt          — n=56 fine-tuned on top-200 + single-name dedup (valid 0.47; preferred for BBC UEF)
-#   _n56_v200_dedup_stripped_finetune.pt — n=56 fine-tuned 2k steps from _full.pt with strip_boilerplate + gendered dedup
-#                                          (lily/tom both appear; less collapsed; current best for BBC UEF demo)
-!build/bitnet_quant_tinystories_final.pt
-!build/bitnet_quant_n56_full.pt
-!build/bitnet_quant_n56_v100_dedup_finetune.pt
-!build/bitnet_quant_n56_v200_dedup_finetune.pt
-!build/bitnet_quant_n56_v200_dedup_stripped_finetune.pt
+# Exception: the deployable BBC-target checkpoint is checked in so the C build
+# is reproducible without re-training (n=56, fine-tuned with boilerplate strip
+# + gendered-name dedup; valid loss ~1.0; ~162 KB).
 !build/bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt
 build/*.sim6502
 build/*.apple2
@@ -34,11 +24,11 @@ build/*.bbc
 build/*_train.log
 build/test_harness.*
 
-# Regeneratable filtered/tokenized dataset caches (rebuilt by tinystories.py).
-modelling/data/cache/
+# Regeneratable filtered/tokenized dataset caches (rebuilt by dataset/data.py).
+dataset/data/cache/
 
 # Source TinyStories data — too large for git (~2 GB train).
-modelling/data/TinyStories-*.txt
+dataset/data/TinyStories-*.txt
 
 # Claude / agent scratch.
 .claude/

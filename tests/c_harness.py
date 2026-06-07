@@ -19,7 +19,7 @@ HARNESS_BIN = REPO_ROOT / "build" / "test_harness.sim6502"
 def pack_ternary(W: np.ndarray) -> bytes:
     """Pack a 2-D int8 matrix with values in {-1, 0, +1} into 2-bit-per-value bytes.
     Encoding: 0→0b00, +1→0b01, -1→0b10. LSB first, 4 values per byte.
-    Width must be a multiple of 4. Matches src/matrix.c packing.
+    Width must be a multiple of 4. Matches inference/c/matrix.c packing.
     """
     H, W_ = W.shape
     if W_ % 4 != 0:
@@ -46,7 +46,7 @@ def pack_ternary(W: np.ndarray) -> bytes:
 def pack_int4(W: np.ndarray) -> bytes:
     """Pack a 2-D int8 matrix with values in [-7, +7] (or [-8, +7]) into nibble-
     packed bytes. Encoding: low nibble first, signed 4-bit (two's complement).
-    Width must be a multiple of 2. Matches src/matrix.c unpack_nibble.
+    Width must be a multiple of 2. Matches inference/c/matrix.c unpack_nibble.
     """
     H, W_ = W.shape
     if W_ % 2 != 0:

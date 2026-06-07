@@ -21,8 +21,8 @@ Datatype contract
   Per-layer right-shift amount:     python int (range 0..14)
   Token / position embeddings:      int8
 
-Architecture (summary of bitnet_quant.py with the final stack)
---------------------------------------------------------------
+Architecture (summary of model/model.py with the final stack)
+-------------------------------------------------------------
   token_emb[id]  →  clip int8
     │
     └─ × 3 blocks:

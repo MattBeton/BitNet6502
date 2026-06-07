@@ -12,15 +12,27 @@ re-preprocess when the vocab spec changes.
 The train file is ~1.9 GB so this script streams line by line and never
 holds the full corpus in memory.
 
-Usage:
-    python modelling/data/prepare_tinystories.py
+Setup (one-time):
+    1. Download the raw corpus from HuggingFace into dataset/data/:
+
+           mkdir -p dataset/data
+           curl -L -o dataset/data/TinyStories-train.txt \\
+             https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-train.txt
+           curl -L -o dataset/data/TinyStories-valid.txt \\
+             https://huggingface.co/datasets/roneneldan/TinyStories/resolve/main/TinyStories-valid.txt
+
+    2. Run this script to collapse to -oneline.txt:
+
+           python -m dataset.prepare_tinystories
+
+    The -oneline.txt files are what dataset/data.py loads.
 """
 from __future__ import annotations
 
 import sys
 from pathlib import Path
 
-DATA_DIR = Path(__file__).resolve().parent
+DATA_DIR = Path(__file__).resolve().parent / "data"
 DELIMITER = "<|endoftext|>"
 
 PAIRS = [

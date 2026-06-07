@@ -15,7 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from c_harness import CHarness
-from modelling.inference import (
+from inference.reference import (
     shift_sat_int8 as py_shift_sat_int8,
     ternary_linear as py_ternary_linear,
     depthwise_conv1d_step as py_depthwise_conv1d_step,
@@ -431,7 +431,7 @@ def test_end_to_end_generation():
 
     Slow: the full 200-token generation takes ~5 minutes under sim65."""
     import subprocess
-    from modelling.inference import (
+    from inference.reference import (
         load_checkpoint, generate_softmax,
     )
 

@@ -1,7 +1,7 @@
 """
 Pytest fixtures for BitNet6502 testing.
 
-Contains the test data matching src/matrix_const.c
+Contains the test data matching inference/c/matrix_const.c
 """
 
 import pytest

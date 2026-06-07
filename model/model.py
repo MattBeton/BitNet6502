@@ -1,9 +1,9 @@
 """Production BitNet language model.
 
 This is the single architecture that ships — no toggles, no ablation flags.
-The 8-bit / int4 / ternary mix below is what produced
-`build/bitnet_quant_n56_full.pt` and what runs on the BBC Model B inside
-`build/bitnet.uef`.
+The 8-bit / int4 / ternary mix below is what produced the deployed checkpoint
+`build/bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt` and what runs on
+the BBC Model B inside `build/bitnet.uef`.
 
 Architecture (3 stacked SSM blocks):
 
@@ -30,7 +30,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 
-from modelling.quant import (
+from model.quant import (
     ternary_quantize, int4_quantize, fake_quant_int8, fake_quant_int16,
     saturating_shift_int8, learned_shift_no_sat, floor_div_pow2,
 )

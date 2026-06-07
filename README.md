@@ -1,63 +1,75 @@
 # Bitnet 6502
 
-Goal: a language model that can run on a 6502 processor. 
+A language model that runs on a 6502 — the 8-bit, 2 MHz CPU from the BBC Micro and Apple II. 32 KB of addressable RAM, integer-only, no FPU. The model + inference engine fit in that budget.
 
-The 6502 processor is an 8-bit (integer-only) processor with 32KB of addressable RAM. It was the processor in the Apple-II and the BBC Micro. The processor operates at a clock speed of 2 MHz.
+Architecture: a 3-block diagonal SSM (Mamba-style) with ternary {-1, 0, +1} weights for most projections and int4 for the head/conv/SSM-C tensors. All activations are int8, accumulators int16, no float anywhere on the device. Trained via fake-quant + straight-through estimator.
 
-This goal splits into a number of sub-requirements:
+## Repo layout
 
-## Modelling
+```
+BitNet6502/
+├── dataset/          # data loading + tokenizer
+│   ├── data.py             # TinyStories streaming loader, 27-char vocab
+│   ├── prepare_tinystories.py
+│   └── data/               # raw TinyStories txt + cache (gitignored)
+├── model/            # architecture + training
+│   ├── model.py            # BitNetLM (the SSM)
+│   ├── quant.py            # STE helpers
+│   ├── budget.py           # 6502 byte-budget solver
+│   └── train.py            # training entrypoint
+├── inference/        # python reference + 6502 C engine + weight export
+│   ├── reference.py        # pure-integer Python reference (spec for C)
+│   ├── export_weights.py   # checkpoint -> inference/c/weights.{c,h}
+│   └── c/                  # 6502 C source — compiled by makefile at repo root
+├── tests/            # A/B parity tests: C (via sim65 harness) vs Python
+├── apple2files/      # Apple II disk images
+├── tools/            # BBC Micro tape (UEF/WAV) builder
+├── build/            # build outputs + checked-in deployable checkpoint
+└── makefile
+```
 
-The modelling challenge here is creating the most efficient model given the tiny RAM space. To make the inference code simpler (removing any multiplication steps) we will use a bitnet architecture; the only allowable parameters are -1, 0, or +1 (see [1.58 Bits](https://arxiv.org/abs/2402.17764)).
+## Train
 
-This constrains us to approximately 80k parameters (20KB model parameters + inference code).
+Download TinyStories first (one-time setup — see the docstring in `dataset/prepare_tinystories.py`), then:
 
-### Modelling constraints
+```bash
+python -m dataset.prepare_tinystories     # collapse raw -> one-story-per-line
+python -m model.train                      # 30k steps, valid loss ~1.0
+```
 
-- Residual stream should be stored in int8. After multiplication with a weight matrix, this might overflow int8 - so we should accumulate into int16 during inference. An activation function can be used to map the int16 value back into an int8 range. 
-- We should use a simple activation function such as hard tanh; this is easy to compute as an if-statement in 6502-C.
-- We won't be able to use any layer norm due to the integer quantized nature of the model
-
-We want to be able to prove that the model can be inferenced in only int8 and int16 datatypes, with only simple operations (add, multiply, switch for hard tanh, etc.). A reasonable way to show the guarantees of it being possible to inference on the 6502 is to write a second inference.py model script that doesn't do any of the ssm training things (convolution, parallel scan operation, etc.), and holds all weights and performs all operations in int8 or int16 quantization. 
+Checkpoints write to `build/`. Default config produces an n_embd=56 model matching the deployed `bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt` (~162 KB of fake-quant weights; ~24 KB after the export-to-int packing).
 
 ## Inference
 
-Secondly, we need to write an inference engine that compiles to 6502 bytecode. We will do this in 6502 C, a variant of C that understands the 8-bit constraints of the 6502.
-
-## Build & test
-
-The inference engine is C compiled with the **cc65** toolchain (`cc65` → `ca65` → `ld65`). The default target is **sim65** — the 6502 CPU simulator bundled with cc65 — which runs the resulting binary directly from the command line without needing a disk image or emulator. `make run` compiles and executes in one step; output goes to stdout.
+Two implementations: a Python reference (integer-only, no autograd, no exp/softmax-via-float) and a C engine that compiles to 6502 bytecode via cc65.
 
 ```bash
-make run        # build and execute in sim65
-make test       # run Python unit tests (creates .venv automatically)
-make test-compare  # build C, run both C and Python, diff stdout
+# Python reference — same integer ops the 6502 runs
+python -m inference.reference
+
+# Build + run the C engine in sim65 (the cc65-bundled 6502 simulator)
+make run
+
+# Export a checkpoint to C source for the engine
+python -m inference.export_weights [checkpoint.pt]   # writes inference/c/weights.{c,h}
 ```
 
-### Python/C equivalence testing
+Other build targets:
 
-The Python reference implementation in `tests/bitnet_python/` mirrors every C operation (ternary decode, matrix multiply with saturating int8 arithmetic, ReLU, RMSNorm). Unit tests in `tests/test_*.py` verify the Python implementation against hardcoded expected values taken from C output. `make test-compare` then validates byte-for-byte that the C binary and the Python runner produce identical output.
+```bash
+make apple2        # Apple II binary -> build/program.apple2
+make bbc           # BBC Micro flat binary -> build/program.bbc
+make bbc-uef       # BBC tape UEF for emulators / PlayUEF
+make bbc-wav       # BBC tape WAV (plays into a real BBC's cassette port)
+```
 
-To extend this pattern when adding a new C function:
+## Tests
 
-1. Add the equivalent Python function in `tests/bitnet_python/`.
-2. Run the C version with instrumented `printf` to capture its output for a known input.
-3. Hardcode that output as the expected value in a pytest test, and assert the Python function matches it.
-4. Add the new function's output to `test_runner.py` so `make test-compare` catches any future divergence at the program level.
+A/B equivalence tests run every C op against its Python reference and assert byte-exact equality. Run via:
 
-# TODO
+```bash
+make test          # builds harness + program binaries, runs pytest
+make test-compare  # runs C and Python end-to-end and diffs stdout
+```
 
-- Switch from int to int16 (current `int` is default to 32-bit int, which is overkill.)
-- Proper random sampling!
-
-## Modelling
-
-- Bring layernorm back? Can we do this at int quant? If so, will probably provide a decent perf boost.
-- Why is the [-127,128] clip causing an issue? Is this not equivalent to an activation function? All this leads me to is that there's an issue with the loss of dynamic range? In that case maybe we should consider scaling up to int16 accumulate into int32... I'm not sure how much perf drop that would lead to on the 6502.
-- Quantization annealing - start in full float and then anneal to int8 - could even just see this as a pretrain+finetune stage, finetuning each layer/weight one-by-one
-- are our in/out embeddings tied?
-- Is the gating really that important? Because we are doubling the size of `in_proj` in order to do the gating. This is one of our largest contributors.
-
-## Long-term
-
-- Once we have a better idea of the optimization space, we could use a massive parallel training run over the full optimization space to just gridsearch the entire thing. Because really how many flops does it take to train this thing? It's tiny; it's probably a completely trivial number of s.
+The Python venv is created automatically on first run from `tests/requirements.txt`.
