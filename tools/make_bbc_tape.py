@@ -90,6 +90,17 @@ def _encode_carrier(gen: _PhaseTone, samples: list[int], seconds: float) -> None
     gen.tone(samples, F_HIGH, seconds * F_HIGH)
 
 
+def _host_addr(addr: int) -> int:
+    """BBC tape headers store load/exec as 32-bit values where top 16 bits
+    indicate the address space: 0xFFFF = host main memory, 0x0000 = Tube
+    second processor. On a Model B without a Tube, `*RUN` of a file whose
+    exec address has the top bits clear silently load-and-returns instead
+    of CALLing — the OS thinks it can't reach the destination. We widen
+    any user-supplied 16-bit value to the host-RAM form.
+    """
+    return addr if addr > 0xFFFF else (0xFFFF0000 | addr)
+
+
 def _build_block(*,
                  filename: bytes,
                  load: int,
@@ -101,8 +112,8 @@ def _build_block(*,
     header = bytearray()
     header.append(0x2A)                            # sync byte '*'
     header.extend(filename + b"\x00")              # filename + null
-    header.extend(struct.pack("<I", load))         # load address
-    header.extend(struct.pack("<I", exec_addr))    # exec address
+    header.extend(struct.pack("<I", _host_addr(load)))       # load address
+    header.extend(struct.pack("<I", _host_addr(exec_addr)))  # exec address
     header.extend(struct.pack("<H", block_num))    # block number
     header.extend(struct.pack("<H", len(data)))    # data length
     header.append(0x80 if is_last else 0x00)       # block flag
