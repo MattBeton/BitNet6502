@@ -82,7 +82,7 @@ bbc:
 	        LIB=none.lib \
 	        OUTPUT=build/program.bbc \
 	        all
-	@echo "wrote build/program.bbc ($$(wc -c < build/program.bbc) bytes); load address &1900"
+	@echo "wrote build/program.bbc ($$(wc -c < build/program.bbc) bytes); load address &1200"
 
 # Clean up build artifacts
 clean:
@@ -139,13 +139,16 @@ $(VENV): pyproject.toml
 
 # Build a BBC Micro tape WAV from the BBC binary. Plays into the cassette port.
 # Uses system python3 — make_bbc_tape.py is stdlib-only, no venv needed.
+# Load/exec = &1200 to match bbc.cfg's MAIN start (binary is not position-
+# independent; loading anywhere else and CALLing it crashes on the first
+# absolute JSR).
 bbc-wav: build/program.bbc
-	python3 tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.wav
+	python3 tools/make_bbc_tape.py build/program.bbc --load 0x1200 --exec 0x1200 --name BITNET --out build/bitnet.wav
 	@echo "wrote build/bitnet.wav"
 
 # Build a BBC Micro tape UEF from the BBC binary. Drop into PlayUEF
 # (playuef.8bitkick.cc/?LOCAL=true) to convert to audio in-browser, or
 # load directly into an emulator (JSBeeb, BeebEm, b-em).
 bbc-uef: build/program.bbc
-	python3 tools/make_bbc_tape.py build/program.bbc --load 0x0E00 --exec 0x0E00 --name BITNET --out build/bitnet.uef
+	python3 tools/make_bbc_tape.py build/program.bbc --load 0x1200 --exec 0x1200 --name BITNET --out build/bitnet.uef
 	@echo "wrote build/bitnet.uef"
