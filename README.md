@@ -1,98 +1,74 @@
 # Bitnet 6502
 
+<img src="https://mattbeton.com/img/blog/bitnet-6502/header.png" alt="A BBC Micro generating text from the model" width="260" align="right">
+
 A language model that runs on a 6502 — the 8-bit, 2 MHz CPU from the BBC Micro and Apple II. 32 KB of addressable RAM, integer-only, no FPU. The model + inference engine fit in that budget.
 
-Architecture: a 3-block diagonal SSM (Mamba-style) with ternary {-1, 0, +1} weights for most projections and int4 for the head/conv/SSM-C tensors. All activations are int8, accumulators int16, no float anywhere on the device. Trained via fake-quant + straight-through estimator.
+The prompt `once upon a time` generates the following output:
+
+> once upon a time tom and lily saw things lily were sad her house he heartd them ilily and tom said yes she saw a little girl smiled tom was so excited her mom said yes
+
+Full write-up: [mattbeton.com/blog/bitnet-6502](https://mattbeton.com/blog/bitnet-6502.html)
+
+## Design decisions
+
+Every modelling choice falls out of a hardware constraint:
+
+- **Ternary weights (BitNet).** The 6502 has no multiply instruction, so weights are constrained to {−1, 0, +1} and matmul reduces to add/subtract. Four weights pack per byte, unpacked with a shift. The head/conv/SSM-C tensors keep int4 resolution where ternary is too coarse.
+- **Mamba-style SSM backbone.** A fixed-size recurrent state avoids a KV cache that grows with sequence length — inference memory stays flat, which matters against a 32 KB budget.
+- **int8 activations, int16 accumulate.** Dot products accumulate in 16-bit, then re-scale through a learned right-shift so values don't saturate on the way back to int8. No float anywhere on the device.
+- **Character tokenization** (27 tokens: a–z + space) keeps the embed/unembed matrices small against the parameter budget.
+
+Trained in PyTorch via fake-quant + straight-through estimator, then exported to packed integer weights for the C engine.
 
 ## Repo layout
 
 ```
 BitNet6502/
-├── dataset/          # data loading + tokenizer
-│   ├── data.py             # TinyStories streaming loader, 27-char vocab
-│   ├── prepare_tinystories.py
-│   └── data/               # raw TinyStories txt + cache (gitignored)
-├── model/            # architecture + training
-│   ├── model.py            # BitNetLM (the SSM)
-│   ├── quant.py            # STE helpers
-│   ├── budget.py           # 6502 byte-budget solver
-│   └── train.py            # training entrypoint
-├── inference/        # python reference + 6502 C engine + weight export
-│   ├── reference.py        # pure-integer Python reference (spec for C)
-│   ├── export_weights.py   # checkpoint -> inference/c/weights.{c,h}
-│   └── c/                  # 6502 C source — compiled by makefile at repo root
-├── tests/            # A/B parity tests: C (via sim65 harness) vs Python
-├── apple2files/      # Apple II disk images
-├── tools/            # BBC Micro tape (UEF/WAV) builder
-├── build/            # build outputs + checked-in deployable checkpoint
+├── dataset/       # data loading + tokenizer
+├── model/         # architecture + training
+├── inference/     # python reference + 6502 C engine + weight export
+├── tests/         # A/B parity tests: C (via sim65 harness) vs Python
+├── apple2files/   # Apple II disk images
+├── tools/         # BBC Micro tape (UEF/WAV) builder
+├── build/         # build outputs + checked-in deployable checkpoint
 └── makefile
 ```
 
-## Setup
+# Usage
 
-Three install paths depending on what you want to do:
+## Requirements
 
 ```bash
-# A. Run the BBC binary in sim65 — no Python at all.
-brew install cc65        # macOS; or your distro's cc65 package
-make run                 # builds + runs build/program.sim6502
-
-# B. Run the Python reference / parity tests.
+brew install cc65                     # 6502 C compiler + sim65 emulator
 python3 -m venv .venv
-.venv/bin/pip install -e ".[dev]"        # numpy, torch, pytest, plus jupyter/datasets/matplotlib for poking around
-make test                                # builds harness + runs pytest
-
-# C. Train your own model.
-# Path B, then download TinyStories (one-time) — see the docstring in
-# dataset/prepare_tinystories.py for the curl commands.
-python -m dataset.prepare_tinystories
-python -m model.train
+.venv/bin/pip install -e ".[dev]"     # numpy, torch, pytest
 ```
 
-The default makefile bootstrap (`make test`) creates `.venv/` from `pyproject.toml` on first run.
+## Train + export pipeline
 
-## Train
-
-Download TinyStories first (one-time setup — see the docstring in `dataset/prepare_tinystories.py`), then:
+A trained model is checked in (`inference/c/weights.c`), so `make run` works out of the box. To train your own, the flow is linear — data → train → export → run:
 
 ```bash
-python -m dataset.prepare_tinystories     # collapse raw -> one-story-per-line
-python -m model.train                      # 30k steps, valid loss ~1.0
+python -m dataset.prepare_tinystories                # build corpus
+python -m model.train                                # train checkpoint in build/
+python -m inference.export_weights [checkpoint.pt]   # export checkpoint to C weights
+make run                                             # build + run C engine in sim65
 ```
 
-Checkpoints write to `build/`. Default config produces an n_embd=56 model matching the deployed `bitnet_quant_n56_v200_dedup_stripped_v2_finetune.pt` (~162 KB of fake-quant weights; ~24 KB after the export-to-int packing).
-
-## Inference
-
-Two implementations: a Python reference (integer-only, no autograd, no exp/softmax-via-float) and a C engine that compiles to 6502 bytecode via cc65.
+Deploy the built binary to hardware:
 
 ```bash
-# Python reference — same integer ops the 6502 runs
-python -m inference.reference
-
-# Build + run the C engine in sim65 (the cc65-bundled 6502 simulator)
-make run
-
-# Export a checkpoint to C source for the engine
-python -m inference.export_weights [checkpoint.pt]   # writes inference/c/weights.{c,h}
-```
-
-Other build targets:
-
-```bash
-make apple2        # Apple II binary -> build/program.apple2
-make bbc           # BBC Micro flat binary -> build/program.bbc
 make bbc-uef       # BBC tape UEF for emulators / PlayUEF
-make bbc-wav       # BBC tape WAV (plays into a real BBC's cassette port)
 ```
+
+This produces a UEF image of the tape that can be read into a BBC. This can be ingested by [PlayUEF](http://playuef.8bitkick.cc/?LOCAL=true) to play the audio into the BBC Micro's tape drive input.
 
 ## Tests
 
-A/B equivalence tests run every C op against its Python reference and assert byte-exact equality. Run via:
+A/B equivalence tests run every C op against its Python reference and assert byte-exact equality:
 
 ```bash
-make test          # builds harness + program binaries, runs pytest
-make test-compare  # runs C and Python end-to-end and diffs stdout
+make test          # build harness + binaries, run pytest
+make test-compare  # run C and Python end-to-end, diff stdout
 ```
-
-The Python venv is created automatically on first run from `tests/requirements.txt`.
